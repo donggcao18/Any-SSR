@@ -5,15 +5,17 @@
 # DeepSpeed Team
 import sys
 sys.dont_write_bytecode = True
-import debugpy
 
-try:
-    # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-    debugpy.listen(("localhost", 9576))
-    print("Waiting for debugger attach")
-    debugpy.wait_for_client()
-except Exception as e:
-    pass
+# Optional debugger attach (disabled by default)
+import os
+if os.getenv("ANYSSR_ENABLE_DEBUGPY", "0") == "1":
+    try:
+        import debugpy
+        debugpy.listen(("localhost", int(os.getenv("ANYSSR_DEBUGPY_PORT", "9576"))))
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+    except Exception:
+        pass
 
 import argparse
 import os
@@ -293,11 +295,17 @@ def main():
     else:
         Datasets = args.dataset_name
     for dataset in Datasets:
-        dataset_path = os.path.join(args.data_path,dataset)
+        # IMPORTANT: hf:* datasets are *dataset identifiers*, not filesystem paths.
+        # Keep the original pipeline (`create_prompt_dataset`) unchanged.
+        if isinstance(dataset, str) and dataset.startswith("hf:"):
+            dataset_id = dataset
+        else:
+            dataset_id = os.path.join(args.data_path, dataset)
+
         # Prepare the data
         train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
             args.local_rank,
-            dataset_path,
+            dataset_id,
             args.data_output_path,
             args.seed,
             distributed=False

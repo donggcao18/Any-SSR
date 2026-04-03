@@ -1,22 +1,15 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-
 from transformers.models.llama import LlamaForCausalLM
 import torch
 from torch.nn import CrossEntropyLoss
 from typing import Optional, List, Tuple, Union
 from transformers.modeling_outputs import CausalLMOutputWithPast, BaseModelOutputWithPast
-
 import logging
-
 from transformers.cache_utils import Cache, DynamicCache
-
 from transformers.utils import logging
-
 from transformers.models.llama import LlamaModel
-
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaSdpaAttention, LlamaConfig, LlamaRMSNorm, LlamaRotaryEmbedding, LlamaAttention, LlamaFlashAttention2, LlamaMLP, repeat_kv, apply_rotary_pos_emb
-
 import torch.nn as nn
 
 import torch.nn.functional as F
@@ -48,14 +41,24 @@ LLAMA_ATTENTION_CLASSES = {
 
 feature_layers = 4
 gamma = 10000
-router_weights_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/router_weights'
-dataset_path = '/U_PZL2023ZZ0005/rhe/dataset/TRACE-Benchmark/LLM-CL-Benchmark_5000/'
-dataset_cache_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/outputs_router_dataset_cache'
-paths = [router_weights_path,dataset_cache_path]
 
+# ---- configurable paths (works on Windows/Linux) ----
+router_weights_path = os.environ.get(
+    "ANYSSR_ROUTER_WEIGHTS_PATH",
+    os.path.join("output_models", "router_weights"),
+)
+dataset_path = os.environ.get(
+    "ANYSSR_DATASET_PATH",
+    os.path.join("dataset", "TRACE-Benchmark", "LLM-CL-Benchmark_5000"),
+)
+dataset_cache_path = os.environ.get(
+    "ANYSSR_DATASET_CACHE_PATH",
+    os.path.join("output_models", "outputs_router_dataset_cache"),
+)
+
+paths = [router_weights_path, dataset_cache_path]
 for path in paths:
-    if not os.path.exists(path):
-        os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
 
 class NewLlamaForCausalLM(LlamaForCausalLM):
     _tied_weights_keys = ["lm_head.weight"]
@@ -162,7 +165,6 @@ def train():
     num_epochs = 1
     max_length = 150
 
-
     model, tokenizer = load_model_and_tokenizer()
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -172,7 +174,17 @@ def train():
         else:
             print(1)
 
-    inference_tasks = ['NumGLUE-cm','NumGLUE-ds','FOMC','20Minuten','C-STANCE','Py150','MeetingBank','ScienceQA']
+    # Task order (must match your downstream inference order)
+    inference_tasks = [
+        "hf:CONCODE",
+        "hf:CodeTrans",
+        "hf:CodeSearchNet",
+        "hf:BFP",
+        "hf:TheVault_Csharp",
+        "hf:KodCode",
+        "hf:RunBugRun",
+        "hf:CoST",
+    ]
     import numpy as np
 
     def train_initial_router(model, infer_dataloader, step):
@@ -263,10 +275,14 @@ def train():
         all_datasets = []
         
         if i == 0:
-            for inference_task_id in range(len(cur_inference_tasks)):    
+            for inference_task_id in range(len(cur_inference_tasks)):
                 inference_task = inference_tasks[inference_task_id]
-                cur_dataset_path = os.path.join(dataset_path, inference_task)
-                
+                # hf:* datasets are dataset identifiers, not filesystem paths
+                if isinstance(inference_task, str) and inference_task.startswith("hf:"):
+                    cur_dataset_path = inference_task
+                else:
+                    cur_dataset_path = os.path.join(dataset_path, inference_task)
+
                 train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
                     -1,
                     cur_dataset_path,
@@ -278,11 +294,14 @@ def train():
                 train_dataset.answer_dataset = [inference_task_id for _ in train_dataset.answer_dataset]
                 all_datasets.append(train_dataset)
         else:
-            # inference_task = inference_tasks[i+1] # Revise to +1 
-            inference_task = inference_tasks[i] # Revise to +1 
+            inference_task = inference_tasks[i]
             inference_task_id = i
-            cur_dataset_path = os.path.join(dataset_path, inference_task)
-                
+            # hf:* datasets are dataset identifiers, not filesystem paths
+            if isinstance(inference_task, str) and inference_task.startswith("hf:"):
+                cur_dataset_path = inference_task
+            else:
+                cur_dataset_path = os.path.join(dataset_path, inference_task)
+
             # data preparation
             train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
                 -1,

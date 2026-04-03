@@ -58,7 +58,7 @@ replace_bloom_attn_with_flash_attn()
 
 # my_peft中修改了lora相关的逻辑
 from model.Replay.LFPT5 import getInitialPrompt
-# from model.Dynamic_network.PP import PP, convert_PP_model
+from model.Dynamic_network.PP import PP, convert_PP_model
 from model.Dynamic_network.L2P import convert_L2P_model
 
 
@@ -367,15 +367,19 @@ def main():
     else:
         Datasets = args.dataset_name
     for dataset in Datasets:
-        dataset_path = os.path.join(args.data_path,dataset)
+        # hf:* datasets are dataset identifiers, not filesystem paths
+        if isinstance(dataset, str) and dataset.startswith("hf:"):
+            dataset_path = dataset
+        else:
+            dataset_path = os.path.join(args.data_path, dataset)
+
         # Prepare the data
         train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
             args.local_rank,
             dataset_path,
             args.data_output_path,
-            args.seed
-        )
-
+            args.seed,
+            distributed=True)
         # DataLoaders creation:
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_dataset)

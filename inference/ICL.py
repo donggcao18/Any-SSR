@@ -34,7 +34,9 @@ from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed
 from utils.ds_utils import get_train_ds_config
 from utils.model.model_utils import create_hf_model
 from training.params import Method2Class, AllDatasetName
-from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
+
+# HF code-task metrics only
+from utils.code_metrics import bleu, smooth_bleu
 
 
 # os.environ['CUDA_VISIBLE_DEVICES']="0"
@@ -43,16 +45,11 @@ from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CS
 Constrained_PROMPT = "We will give you several examples and you should follow them to accomplish the task.\n Examples:\n"
 
 
-TASK_PROMT={
-    "FOMC":"What is the monetary policy stance for the following text? A. dovish, B. hawkish, C. neutral. Choose one from A, B and C.\n",
-    "C-STANCE":"判断以下文本对指定对象的态度，选择一项：A.支持，B.反对，C.中立。输出A，B或者C。\n",
-    "ScienceQA":"Choose an answer for the following question and give your reasons.\n\n",
-    "NumGLUE-cm":"Solve the following math problem.\n",
-    "NumGLUE-ds":"Solve the following math problem.\n",
-    "MeetingBank":"Write a summary of the following meeting transcripts.\n",
-    "Py150":"Continue writing the code.\n",
-    "20Minuten":"Provide a simplified version of the following paragraph in German.\n\n"
-}
+# Legacy TRACE prompts/evals removed for hf:* tasks.
+# For hf:* datasets, the instruction prompt is produced by `HFMultiTaskCodeDataset`
+# using `utils/data/hf_task_specs.py` instruction pools.
+TASK_PROMT = {}
+
 
 def collate_function(batch_prompt,demonstrations, task):
     processed_prompt = []
@@ -226,6 +223,8 @@ def main():
         ground_truths = []
         model.eval()
 
+        is_hf_task = isinstance(task, str) and task.startswith("hf:")
+
         for step, batch in enumerate(infer_dataloader):
             # sources_sequences += batch['sources']
             ground_truths += batch['gts']
@@ -264,32 +263,18 @@ def main():
 
             if args.global_rank <= 0:
                 sou_sequences = tokenizer.batch_decode(generate_ids[:, : max_seq_len], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                if task=="FOMC" or task=="C-STANCE":
-                    pre_sequences = tokenizer.batch_decode(generate_ids[:, max_seq_len:max_seq_len+1], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                else:
-                    pre_sequences = tokenizer.batch_decode(generate_ids[:, max_seq_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                pre_sequences = tokenizer.batch_decode(generate_ids[:, max_seq_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
-                if "NumGLUE" in task:
-                    for i in range(len(pre_sequences)):
-                        pre_sequences[i] = pre_sequences[i].split("\n")[0]
-                elif "MeetingBank" in task:
-                    for i in range(len(pre_sequences)):
-                        pre_sequences[i] = pre_sequences[i].split("Meeting transcripts")[0]
-                elif "ScienceQA" in task:
-                    for i in range(len(pre_sequences)):
-                        pre_sequences[i] = pre_sequences[i].split("Question:")[0]
-                elif "Py150" in task:
-                    for i in range(len(pre_sequences)):
-                        pre_sequences[i] = pre_sequences[i].split("<EOL>")[0]
-                elif "20Minuten" in task:
-                    for i in range(len(pre_sequences)):
-                        pre_sequences[i] = pre_sequences[i].split("Paragraph")[0]
+                # HF code tasks: keep a minimal post-process (stop at empty line)
+                if is_hf_task:
+                    pre_sequences = [s.split("\n\n")[0] for s in pre_sequences]
+
                 predicted_sequences += pre_sequences
                 sources_sequences += sou_sequences
 
         return sources_sequences, predicted_sequences, ground_truths
     
-    def get_random_demonstrations(dem_num, infer_dataset, length_limit, task):
+    def get_random_demonstrations(dem_num, infer_dataset, length_limit, task, is_hf_task: bool = False):
         length_limit_per_sample = length_limit/(dem_num*2)
         demonstrations=[]
         answers = []
@@ -301,10 +286,17 @@ def main():
                 break
             demonstration_id = random.randint(0,len(infer_dataset)-1)
             demonstration=infer_dataset[demonstration_id]  #[{prompt*4},{answer*4}]
-            if task!="Py150":
+
+            # For legacy TRACE tasks, prompts had a fixed task prefix; for hf:* keep as-is.
+            if (not is_hf_task) and task!="Py150":
                 demonstration["prompt"] = demonstration["prompt"][len(TASK_PROMT[task]):]
-            if len(tokenizer(demonstration["prompt"])['input_ids'])+ len(tokenizer(demonstration["answer"])['input_ids']) <= length_limit_per_sample:
-                if task=="FOMC" or task=="C-STANCE":
+
+            # Use tokenizer once for budget check
+            demo_prompt_ids = tokenizer(demonstration["prompt"], add_special_tokens=False)["input_ids"]
+            demo_answer_ids = tokenizer(demonstration["answer"], add_special_tokens=False)["input_ids"]
+
+            if len(demo_prompt_ids) + len(demo_answer_ids) <= length_limit_per_sample:
+                if (not is_hf_task) and (task=="FOMC" or task=="C-STANCE"):
                     if answers.count(demonstration["answer"])<dem_num/3:
                         demonstrations.append(demonstration)
                         answers.append(demonstration["answer"])
@@ -357,24 +349,41 @@ def main():
 
 
     for task in Datasets:
-        data_path = args.data_path
-        inference_output_path = args.inference_output_path
-        inference_output_path = os.path.join(inference_output_path, task)
-        
-        dataset_path = os.path.join(data_path, task)
-        
+        # hf:* datasets are dataset identifiers, not filesystem paths
+        if isinstance(task, str) and task.startswith("hf:"):
+            dataset_path = task
+        else:
+            dataset_path = os.path.join(args.data_path, task)
+
         _, _, infer_dataset = create_prompt_dataset(
-                args.local_rank,
-                dataset_path,
-                args.data_output_path,
-                args.seed
+            -1,
+            dataset_path,
+            'dataset_cache',
+            42,
+            distributed=False
+        )
+        
+        # ICL demonstrations: for hf:* prompts, do NOT strip an assumed TASK_PROMT prefix
+        is_hf_task = isinstance(task, str) and task.startswith("hf:")
+        if is_hf_task:
+            demonstrations = get_random_demonstrations(
+                int(args.demonstrations_num),
+                infer_dataset,
+                args.max_prompt_len,
+                task,
+                is_hf_task=True,
             )
-        
-        demonstrations = get_random_demonstrations(int(args.demonstrations_num), infer_dataset, args.max_prompt_len-len(tokenizer(TASK_PROMT[task]+Constrained_PROMPT)['input_ids']),task)
+        else:
+            demonstrations = get_random_demonstrations(
+                int(args.demonstrations_num),
+                infer_dataset,
+                args.max_prompt_len - len(tokenizer(TASK_PROMT[task] + Constrained_PROMPT)['input_ids']),
+                task,
+                is_hf_task=False,
+            )
+
         print_rank_0("demonstrations length:{}".format(len(demonstrations)),args.global_rank)
-        if task=="MeetingBank":
-            demonstrations = []
-        
+
         inf_data_collator = DataCollator(
                 tokenizer,
                 model=model,
@@ -397,57 +406,26 @@ def main():
         progress_bar = tqdm(total=len(infer_dataloader), leave=True)
         print_rank_0("***** Start inference *****", args.global_rank)
         sources_sequences, predicted_sequences, ground_truths = prediction(model, infer_dataloader, task)
-        # for step, batch in enumerate(test_loader):
-        #     batch_prompt = batch["prompt"]
-        #     answer = batch["answer"]
-            
-        #     #demonstrations
-        #     demonstrations_id = [random.randint(0,len(test_dataset)-1) for i in range(demonstrations_num)]
-        #     demonstrations=test_dataset[demonstrations_id]  #[{prompt*4},{answer*4}]
-        #     demonstrations["prompt"] = [prompt[len(TASK_PROMT[task]):] for prompt in demonstrations["prompt"]]
-        #     batch_prompt = collate_function(batch_prompt, demonstrations, task)
-            
-        #     if task=="FOMC" or task=="C-STANCE":
-        #         output = [output[i][len(batch_prompt[i]):].split("\n")[0] for i in range(len(output))]
-                
-        #         ground_truths += answer
-        #         predicted_sequences += output
-        #         sources_sequences += batch_prompt
-        #         # break
-        #         progress_bar.update(1)
-        #         description = f"Step {step}"
-        #         progress_bar.set_description(description, refresh=False)
-            
-        
-        if task == "ScienceQA":
-            evaluation_result = eval_ScienceQA.eval(predicted_sequences, ground_truths)
-        elif task == "MeetingBank":
-            evaluation_result = eval_MeetingBank.eval(predicted_sequences, ground_truths)
-        elif task == "C-STANCE":
-            evaluation_result = eval_CStance.eval(predicted_sequences, ground_truths)
-        elif task == "Papyrus-f":
-            evaluation_result = eval_PapyrusF.eval(predicted_sequences, ground_truths)
-        elif task == "Py150":
-            evaluation_result = eval_Py150.eval(predicted_sequences, ground_truths)
-        elif task == "FOMC":
-            evaluation_result = eval_FOMC.eval(predicted_sequences, ground_truths)
-        elif task == "NumGLUE-cm":
-            evaluation_result = eval_NumGLUE_cm.eval(predicted_sequences, ground_truths)
-        elif task == "NumGLUE-ds":
-            evaluation_result = eval_NumGLUE_ds.eval(predicted_sequences, ground_truths)
-        elif task == "20Minuten":
-            evaluation_result = eval_20Minuten.eval(sources_sequences, predicted_sequences, ground_truths)
-            
-            
-            
+
+        # Evaluation: for hf:* tasks use BLEU/SmoothBLEU policy only
+        if is_hf_task:
+            if task in ("hf:CodeSearchNet", "hf:TheVault_Csharp"):
+                evaluation_result = {"smooth_bleu": float(smooth_bleu(predicted_sequences, ground_truths))}
+            else:
+                evaluation_result = {"bleu": float(bleu(predicted_sequences, ground_truths))}
+        else:
+            raise NotImplementedError(
+                "ICL.py legacy TRACE evaluation was removed. Use hf:* tasks or adapt evaluation separately."
+            )
+
         print(evaluation_result)
         df = {"eval": evaluation_result, 'prompts': sources_sequences, 'results': predicted_sequences,
             'labels': ground_truths}
-        
-        if not os.path.exists(inference_output_path):
-            os.makedirs(inference_output_path)
+
+        if not os.path.exists(args.inference_output_path):
+            os.makedirs(args.inference_output_path)
             
-        with open(inference_output_path + "/results-" + task + ".json", "w+", encoding='utf-8') as file:
+        with open(args.inference_output_path + "/results-" + task + ".json", "w+", encoding='utf-8') as file:
             json.dump(df, file, ensure_ascii=False)
 
 

@@ -25,5 +25,14 @@ Method2Class = {"PP":PP,
                 "lora":lora,
                 "anamoe":lora}
 
-AllDatasetName = ["C-STANCE","FOMC","MeetingBank","Papyrus-f","Py150","ScienceQA","ToolBench","NumGLUE-cm","NumGLUE-ds","20Minuten"]
+AllDatasetName = [
+    "hf:CodeTrans",
+    "hf:CodeSearchNet",
+    "hf:BFP",
+    "hf:CONCODE",
+    "hf:TheVault_Csharp",
+    "hf:KodCode",
+    "hf:RunBugRun",
+    "hf:CoST",
+]
 

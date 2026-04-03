@@ -27,17 +27,18 @@ import math
 import sys
 from tqdm import tqdm
 import pandas as pd
-import debugpy
 
 print('-----------------------------------------------------------------------')
 
-try:
-    # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-    debugpy.listen(("localhost", 9797))
-    print("Waiting for debugger attach")
-    debugpy.wait_for_client()
-except Exception as e:
-    pass
+# Optional debugger attach (disabled by default)
+if os.getenv("ANYSSR_ENABLE_DEBUGPY", "0") == "1":
+    try:
+        import debugpy
+        debugpy.listen(("localhost", int(os.getenv("ANYSSR_DEBUGPY_PORT", "9797"))))
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+    except Exception:
+        pass
 
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
@@ -63,7 +64,10 @@ from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed
     get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.model.model_utils import create_hf_model
-from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
+
+# New evaluation: BLEU/SmoothBLEU for HF tasks
+from utils.code_metrics import bleu as corpus_bleu, smooth_bleu as corpus_smooth_bleu
+
 from training.params import Method2Class, AllDatasetName
 
 from model.Replay.LFPT5 import getInitialPrompt
@@ -258,11 +262,15 @@ def main():
         all_datasets = []
         for inference_task_id in range(len(cur_inference_tasks)):
             inference_task = inference_tasks[inference_task_id]
-            dataset_path = os.path.join(args.data_path, inference_task)
+            # hf:* tasks are dataset identifiers, not filesystem paths
+            if isinstance(inference_task, str) and inference_task.startswith("hf:"):
+                dataset_id = inference_task
+            else:
+                dataset_id = os.path.join(args.data_path, inference_task)
             # Prepare the data
             train, test, infer_dataset = create_prompt_dataset(
                 -1,
-                dataset_path,
+                dataset_id,
                 'dataset_cache',
                 42,
                 distributed=False
@@ -328,26 +336,16 @@ def main():
         print("***** Start inference *****", inference_task_id)
         sources_sequences, predicted_sequences, ground_truths = prediction(model, infer_dataloader)
         
-        # Get Accuracy/ROUGE/BLEU/...
-        # The evaluation result is stored in a dictionary. e.g. {"accuracy": .., "rouge-L": ..}
-        if inference_task == "ScienceQA":
-            evaluation_result = eval_ScienceQA.eval(predicted_sequences, ground_truths)
-        elif inference_task == "MeetingBank":
-            evaluation_result = eval_MeetingBank.eval(predicted_sequences, ground_truths)
-        elif inference_task == "C-STANCE":
-            evaluation_result = eval_CStance.eval(predicted_sequences, ground_truths)
-        elif inference_task == "Papyrus-f":
-            evaluation_result = eval_PapyrusF.eval(predicted_sequences, ground_truths)
-        elif inference_task == "Py150":
-            evaluation_result = eval_Py150.eval(predicted_sequences, ground_truths)
-        elif inference_task == "FOMC":
-            evaluation_result = eval_FOMC.eval(predicted_sequences, ground_truths)
-        elif inference_task == "NumGLUE-cm":
-            evaluation_result = eval_NumGLUE_cm.eval(predicted_sequences, ground_truths)
-        elif inference_task == "NumGLUE-ds":
-            evaluation_result = eval_NumGLUE_ds.eval(predicted_sequences, ground_truths)
-        elif inference_task == "20Minuten":
-            evaluation_result = eval_20Minuten.eval(sources_sequences, predicted_sequences, ground_truths)
+        # Get BLEU/SmoothBLEU for HF tasks (TRACE evaluators removed)
+        if isinstance(inference_task, str) and inference_task.startswith("hf:"):
+            if inference_task in {"hf:CodeSearchNet", "hf:TheVault_Csharp"}:
+                evaluation_result = {
+                    "smooth_bleu": float(corpus_smooth_bleu(ground_truths, predicted_sequences, max_order=4)),
+                }
+            else:
+                evaluation_result = {
+                    "bleu": float(corpus_bleu(ground_truths, predicted_sequences, max_order=4, smooth=False)),
+                }
         else:
             evaluation_result = {}
 

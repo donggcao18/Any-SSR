@@ -47,9 +47,26 @@ LLAMA_ATTENTION_CLASSES = {
 }
 feature_layers = 4
 gamma = 10000
-router_weights_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/router_weights'
-dataset_path = '/U_PZL2023ZZ0005/rhe/dataset/TRACE-Benchmark/LLM-CL-Benchmark_5000/'
-dataset_cache_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/outputs_router_dataset_cache'
+
+# ---- configurable paths (works on Windows/Linux) ----
+# Router evaluation only needs router weights + a cache dir for dataset processing.
+# For HF tasks, `dataset_path` is unused.
+router_weights_path = os.environ.get(
+    "ANYSSR_ROUTER_WEIGHTS_PATH",
+    os.path.join("output_models", "router_weights"),
+)
+dataset_path = os.environ.get(
+    "ANYSSR_DATASET_PATH",
+    os.path.join("dataset", "TRACE-Benchmark", "LLM-CL-Benchmark_5000"),
+)
+dataset_cache_path = os.environ.get(
+    "ANYSSR_DATASET_CACHE_PATH",
+    os.path.join("output_models", "outputs_router_dataset_cache"),
+)
+
+# Ensure dirs exist for local runs
+os.makedirs(router_weights_path, exist_ok=True)
+os.makedirs(dataset_cache_path, exist_ok=True)
 
 class NewLlamaForCausalLM(LlamaForCausalLM):
     _tied_weights_keys = ["lm_head.weight"]
@@ -138,32 +155,46 @@ class NewLlamaForCausalLM(LlamaForCausalLM):
     def MoeClassifier():
         pass
 
+# Model path/id used for router evaluation (set this to your local model folder or HF id)
+MODEL_NAME_OR_PATH = "meta-llama/Llama-2-7b-chat-hf"
+
 def load_model_and_tokenizer(step):
     model = NewLlamaForCausalLM.from_pretrained(
-               '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf',
-                device_map="auto",
-                torch_dtype="auto",
-                # task_number=step+2,
-                task_number=step+1,
-                trust_remote_code=True,
-                gamma=gamma
-            )
-    
+        MODEL_NAME_OR_PATH,
+        device_map="auto",
+        torch_dtype="auto",
+        task_number=step + 1,
+        trust_remote_code=True,
+        gamma=gamma,
+    )
+
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf', trust_remote_code=True
+        MODEL_NAME_OR_PATH, trust_remote_code=True
     )
 
     return model, tokenizer
 
+
 def load_tokenizer():
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf', trust_remote_code=True
+        MODEL_NAME_OR_PATH, trust_remote_code=True
     )
 
     return tokenizer
 
+
 def train():
-    inference_tasks = ['NumGLUE-cm','NumGLUE-ds','FOMC','20Minuten','C-STANCE','Py150','MeetingBank','ScienceQA']
+    # Task order (must match router training & downstream inference order)
+    inference_tasks = [
+        "hf:CONCODE",
+        "hf:CodeTrans",
+        "hf:CodeSearchNet",
+        "hf:BFP",
+        "hf:TheVault_Csharp",
+        "hf:KodCode",
+        "hf:RunBugRun",
+        "hf:CoST",
+    ]
     import numpy as np
 
     def eval_router(model, infer_dataloader, step):
@@ -199,9 +230,14 @@ def train():
         # cur_inference_tasks = inference_tasks[0:i+2]
         cur_inference_tasks = inference_tasks[0:i+1]
         all_datasets = []
-        for inference_task_id in range(len(cur_inference_tasks)):    # evaluation for previous tasks in a single round
+        for inference_task_id in range(len(cur_inference_tasks)):
             inference_task = inference_tasks[inference_task_id]
-            cur_dataset_path = os.path.join(dataset_path, inference_task)
+            # hf:* datasets are dataset identifiers, not filesystem paths
+            if isinstance(inference_task, str) and inference_task.startswith("hf:"):
+                cur_dataset_path = inference_task
+            else:
+                cur_dataset_path = os.path.join(dataset_path, inference_task)
+
             # Prepare the data
             train, test, infer_dataset = create_prompt_dataset(
                 -1,
@@ -211,10 +247,7 @@ def train():
                 distributed=False
             )
 
-            # infer_dataset = test
-            
             infer_dataset.answer_dataset = [inference_task_id for _ in infer_dataset.answer_dataset]
-            
             all_datasets.append(infer_dataset)
         
         # continue
@@ -230,7 +263,8 @@ def train():
             max_prompt_len=512,
             max_ans_len=256,
             pad_to_multiple_of=8,
-            inference=True
+            inference=True,
+            task=inference_task,
         )
         infer_sampler = SequentialSampler(infer_dataset)
         infer_dataloader = DataLoader(infer_dataset,
