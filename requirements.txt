@@ -1,0 +1,54 @@
+# Python version: 3.11.11
+# CUDA version: 12.4
+
+# Core Deep Learning
+torch==2.5.1
+# torchtriton==3.1.0
+# triton==3.1.0
+
+# Hugging Face Ecosystem
+transformers==4.47.1
+accelerate==0.32.1
+peft==0.6.2
+datasets==2.14.7
+tokenizers==0.21.4
+safetensors==0.4.5
+huggingface-hub==0.34.6
+sentencepiece==0.2.0
+
+# Training Optimization
+deepspeed==0.16.1
+bitsandbytes==0.46.0
+# flash-attn==2.7.2.post1
+einops==0.8.0
+
+# Scientific Computing
+numpy==1.25.2
+scipy==1.14.1
+scikit-learn==1.6.1
+pandas==2.2.3
+sympy==1.13.1
+
+# NLP / Evaluation Metrics
+nltk==3.5
+rouge==1.0.1
+sacrebleu==2.4.3
+sacremoses==0.1.1
+tiktoken==0.9.0
+fuzzywuzzy==0.18.0
+regex==2024.11.6
+
+# Optimization (Continual Learning)
+cvxpy==1.6.0
+qpth==0.0.18
+quadprog==0.1.13
+
+# Utilities
+tqdm==4.67.1
+psutil==6.1.0
+networkx==3.1
+pyarrow==13.0.0
+tensorboard==2.14.0
+packaging==24.2
+requests==2.32.3
+PyYAML==6.0.2
