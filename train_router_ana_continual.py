@@ -1,9 +1,3 @@
-import sys
-import types
-# Stub out torchvision before transformers probes for it, to avoid ABI mismatch crash
-if "torchvision" not in sys.modules:
-    sys.modules["torchvision"] = types.ModuleType("torchvision")
-
 import os
 import argparse
 from transformers.models.llama import LlamaForCausalLM
