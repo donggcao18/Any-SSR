@@ -14,5 +14,6 @@ python eval_router_ana.py \
     --max_prompt_len      512 \
     --max_ans_len         256 \
     --batch_size          1 \
+    --log_file            "output_models/logs/eval_router_with_pool.log" \
     --tasks hf:CONCODE hf:CodeTrans hf:CodeSearchNet hf:BFP hf:TheVault_Csharp hf:KodCode hf:RunBugRun hf:CoST
 

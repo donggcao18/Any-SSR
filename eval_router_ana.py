@@ -75,6 +75,9 @@ def parse_args():
     parser.add_argument("--tasks", type=str, nargs="+", default=None,
                         help="Ordered task list. Use 'hf:<name>' for HuggingFace tasks or a plain "
                              "name for local datasets. Defaults to all 8 CODETASK tasks.")
+    parser.add_argument("--log_file", type=str, default=None,
+                        help="Path to a log file. Results are always printed to stdout; "
+                             "this additionally writes them to the specified file.")
     return parser.parse_args()
 
 class NewLlamaForCausalLM(LlamaForCausalLM):
@@ -198,6 +201,9 @@ def train(args):
     dataset_cache_path = args.dataset_cache_path
     import numpy as np
 
+    logger = logging.getLogger("eval_router")
+    step_results = []  # list of (step, tasks_seen, correct, total, acc)
+
     def eval_router(model, infer_dataloader, step):
         model_dtype = next(model.parameters()).dtype
         fe_weight = torch.load(f'{router_weights_path}/step{step}_fe_weight.pth', map_location=model.device).to(model_dtype)
@@ -207,22 +213,32 @@ def train(args):
         with torch.no_grad():
             count = 0
             correct = 0
-            print(f'-----------------------start evaluation of step {step}-------------------')
+            tasks_seen = inference_tasks[:step + 1]
+            logger.info(f"Step {step} | Tasks: {tasks_seen}")
+            logger.info(f"-" * 60)
             for steps, batch in enumerate(infer_dataloader):
                 labels = batch['gts']
                 input_ids = batch['input_ids']
                 input_ids = input_ids.to('cuda')
                 prediction = model(input_ids).to(torch.float32)
 
-                if labels == [prediction.argmax().item()]:
+                pred_id = prediction.argmax().item()
+                if labels == [pred_id]:
                     correct += 1
                 else:
-                    print(f'prediction: {prediction.argmax().item()}, labels: {labels}')
-                
+                    logger.info(
+                        f"  [WRONG] sample={count} "
+                        f"pred={pred_id} ({inference_tasks[pred_id]}) "
+                        f"gt={labels[0]} ({inference_tasks[labels[0]]})"
+                    )
+
                 count += 1
-                
+
             acc = correct / count
-            print(f'step{step} has an acc of：{acc}')
+            logger.info(
+                f"Step {step} | correct={correct}/{count} | acc={acc:.4f}"
+            )
+            step_results.append((step, tasks_seen[:], correct, count, acc))
 
     # for i in range(0, len(inference_tasks) - 1):
     for i in range(0, len(inference_tasks)):
@@ -276,8 +292,21 @@ def train(args):
                                         batch_size=args.batch_size)
 
         # Inference !
-        # print("***** Start evaluation *****")
         eval_router(model, infer_dataloader, i)
+
+    # ---- Final summary ----
+    logger = logging.getLogger("eval_router")
+    logger.info("=" * 60)
+    logger.info("ROUTER EVALUATION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"{'Step':<6} {'#Tasks':<8} {'Correct':<10} {'Total':<10} {'Acc':<10}")
+    logger.info("-" * 60)
+    for step, tasks_seen, correct, total, acc in step_results:
+        logger.info(f"{step:<6} {len(tasks_seen):<8} {correct:<10} {total:<10} {acc:<10.4f}")
+    logger.info("=" * 60)
+    if step_results:
+        avg_acc = sum(r[4] for r in step_results) / len(step_results)
+        logger.info(f"Average accuracy across all steps: {avg_acc:.4f}")
 
 
 if __name__ == "__main__":
@@ -293,12 +322,18 @@ if __name__ == "__main__":
     os.makedirs(args.router_weights_path, exist_ok=True)
     os.makedirs(args.dataset_cache_path, exist_ok=True)
 
+    handlers = [logging.StreamHandler()]
+    if args.log_file:
+        os.makedirs(os.path.dirname(os.path.abspath(args.log_file)), exist_ok=True)
+        handlers.append(logging.FileHandler(args.log_file, mode="a", encoding="utf-8"))
+
     logging.basicConfig(
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
     )
-    print(
+    logging.getLogger("eval_router").info(
         "-----------------------------------start router evaluation---------------------------------------"
     )
     train(args)
