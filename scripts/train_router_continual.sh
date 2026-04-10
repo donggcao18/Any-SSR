@@ -9,8 +9,8 @@ python train_router_ana_continual.py \
     --cuda_devices   "0,1" \
     --feature_layers 4 \
     --gamma          10000 \
-    --router_weights_path "output_models/router_weights" \
-    --dataset_cache_path  "output_models/outputs_router_dataset_cache" \
+    --router_weights_path "output_models/router_weights_with_pool" \
+    --dataset_cache_path  "output_models/outputs_router_dataset_with_pool_cache" \
     --dataset_path        "dataset/TRACE-Benchmark/LLM-CL-Benchmark_5000" \
     --max_prompt_len 512 \
     --max_ans_len    256 \
