@@ -7,7 +7,7 @@ from torch.utils.data import Subset
 import re
 import os
 
-CODETASK_HF_REPO = "dongg18/CODETASK"
+CODETASK_HF_REPO = "dongg18/CODETASK_with_instruction_pool"
 
 # Exact subfolder names in dongg18/CODETASK — must match the `name=` arg to load_dataset.
 CODETASK_TASK_NAMES = [
