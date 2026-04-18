@@ -6,7 +6,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from model.base_model import CL_Base_Model
 from utils.utils import print_rank_0, to_device, get_all_reduce_mean
-
+from utils.model.model_utils import get_transformer_layers
 
 class O_LoRA(CL_Base_Model):
     def __init__(self,
@@ -78,6 +78,18 @@ class O_LoRA(CL_Base_Model):
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
                 self.model.step()
 
+            # Validate on eval split after each epoch
+            print_rank_0(
+                f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
+                self.args.global_rank)
+            eval_result = self.task_generation_evaluation(
+                task,
+                eval_dataloader,
+                self.device,
+                max_ans_len=int(self.args.max_ans_len[i_task]),
+            )
+            print_rank_0(f"[task={task}] eval result: {eval_result}", self.args.global_rank)
+
         def split_string_by_first_num(s):  
             for i, c in enumerate(s):  
                 if c.isdigit():  
@@ -90,7 +102,8 @@ class O_LoRA(CL_Base_Model):
         ## Different models may have different naming of modules.
         ## 'setattr' is not work. So We have to hard code the name temporarily.
         # layer_list = self.model.base_model.model.model.decoder.layers   # opt
-        layer_list = self.model.base_model.model.model.layers           # llama
+        # layer_list = self.model.base_model.model.model.layers           # llama
+        layer_list = get_transformer_layers(self.model)
         state_dict = self.model.state_dict()    
         for k in state_dict:
             # # e.g. opt-1.3b
@@ -141,6 +154,17 @@ class O_LoRA(CL_Base_Model):
                 param.requires_grad = True
             elif name.find("lora_") != -1:
                 param.requires_grad = False
+
+        #### TEST ####
+        for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[:i_task+1]):
+            print_rank_0(f"***** Validating on {eval_task} after task training: {task} *****", self.args.global_rank)
+            test_result = self.task_generation_evaluation(
+                eval_task,
+                eval_dataset,
+                self.device,
+                max_ans_len=int(self.args.max_ans_len[seen_idx]),
+            )
+            print_rank_0(f"[task={eval_task}] test result: {test_result}", self.args.global_rank)
 
         #### SAVE ####
         if self.args.output_dir is not None:

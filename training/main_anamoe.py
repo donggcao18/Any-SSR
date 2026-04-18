@@ -42,7 +42,7 @@ from deepspeed.utils import safe_get_full_grad
 
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
-from utils.data.data_utils import create_prompt_dataset
+from utils.data.data_utils import create_prompt_dataset, create_codetask_dataset
 from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
@@ -50,15 +50,18 @@ from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_line
 from utils.model.model_utils import create_hf_model
 
 # add flash attention
-from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
-from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
+try:
+    from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
+    from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
 
-replace_llama_attn_with_flash_attn()
-replace_bloom_attn_with_flash_attn()
+    replace_llama_attn_with_flash_attn()
+    replace_bloom_attn_with_flash_attn()
+except Exception:
+    print("[INFO] flash-attn is unavailable; fallback to standard attention.")
 
 # my_peft中修改了lora相关的逻辑
 from model.Replay.LFPT5 import getInitialPrompt
-# from model.Dynamic_network.PP import PP, convert_PP_model
+from model.Dynamic_network.PP import convert_PP_model
 from model.Dynamic_network.L2P import convert_L2P_model
 
 
@@ -100,6 +103,7 @@ def parse_args():
     parser.add_argument(
         "--model_name_or_path",
         type=str,
+        default='Qwen/Qwen2.5-Coder-1.5B',
         help=
         "Path to pretrained model or model identifier from huggingface.co/models.",
         required=True,
@@ -117,32 +121,50 @@ def parse_args():
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
+        "--num_train",
+        type=list_of_strings,
+        default='-1',
+        help="Number of training examples for each dataset, -1 means using all the data.",
+    )
+    parser.add_argument(
+        "--num_eval",
+        type=list_of_strings,
+        default='-1',
+        help="Number of evaluation examples for each dataset, -1 means using all the data.",
+    )
+    parser.add_argument(
+        "--num_test",
+        type=list_of_strings,
+        default='-1',
+        help="Number of test examples for each dataset, -1 means using all the data.",
+    )
+    parser.add_argument(
         "--max_prompt_len",
-        type=int,
-        default=512,
+        type=list_of_strings,
+        default='320,320,256,130,256,256,256,256',
         help="The maximum sequence length.",
     )
     parser.add_argument(
         "--max_ans_len",
-        type=int,
-        default=512,
+        type=list_of_strings,
+        default='256,256,256,256,150,150,150,150',
         help="The maximum sequence length.",
     )
 
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-5,
+        default=1e-4,
         help=
         "Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument("--weight_decay",
                         type=float,
-                        default=0.,
+                        default=0.01,
                         help="Weight decay to use.")
     parser.add_argument("--num_train_epochs",
                         type=list_of_strings,
-                        default=None,
+                        default='3,3,3,3,3,3,3,3',
                         help="Total number of training epochs to perform.")
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -208,6 +230,23 @@ def parse_args():
     parser.add_argument('--print_loss',
                         action='store_true',
                         help='Prints loss at each step.')
+    # LoRA related arguments
+    parser.add_argument('--lora_dim',
+                        type=int,
+                        default=16,
+                        help='LoRA dimension')
+    parser.add_argument('--lora_alpha',
+                        type=int,
+                        default=32,
+                        help='LoRA alpha')
+    parser.add_argument('--lora_dropout',
+                        type=float,
+                        default=0.1,
+                        help='LoRA dropout')
+    parser.add_argument('--lora_target_modules',
+                        type=list_of_strings,
+                        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+                        help='LoRA target modules')
     # added by wangxiao
     parser.add_argument('--CL_method',
                 default=None,
@@ -254,6 +293,8 @@ def main():
         'train_batch_size'] = args.per_device_train_batch_size * torch.distributed.get_world_size(
         ) * args.gradient_accumulation_steps
 
+
+
     # If passed along, set the training seed now.
     set_random_seed(args.seed)
     # Barrier to make sure all process are ready to train
@@ -289,7 +330,7 @@ def main():
         from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
 
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules=args.lora_target_modules
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
@@ -366,15 +407,23 @@ def main():
         Datasets = AllDatasetName
     else:
         Datasets = args.dataset_name
-    for dataset in Datasets:
+    
+    if len(args.num_train) == 1:
+        args.num_train = [args.num_train[0]] * len(Datasets)
+    if len(args.num_eval) == 1:
+        args.num_eval = [args.num_eval[0]] * len(Datasets)
+    if len(args.num_test) == 1:
+        args.num_test = [args.num_test[0]] * len(Datasets)
+    assert len(args.num_train) == len(Datasets), "The number of training examples should be specified for each dataset"
+    assert len(args.num_eval) == len(Datasets), "The number of evaluation examples should be specified for each dataset"
+    assert len(args.num_test) == len(Datasets), "The number of test examples should be specified for each dataset"
+    assert len(args.max_prompt_len) == len(Datasets), "The max prompt length should be specified for each dataset"
+    assert len(args.max_ans_len) == len(Datasets), "The max answer length should be specified for each dataset"
+    
+    for i, dataset in enumerate(Datasets):
         dataset_path = os.path.join(args.data_path,dataset)
         # Prepare the data
-        train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
-            args.local_rank,
-            dataset_path,
-            args.data_output_path,
-            args.seed
-        )
+        train_dataset, eval_dataset, test_dataset = create_codetask_dataset(dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i])
 
         # DataLoaders creation:
         if args.local_rank == -1:
@@ -390,8 +439,8 @@ def main():
         data_collator = DataCollator(
             tokenizer,
             padding="longest",
-            max_prompt_len=args.max_prompt_len,
-            max_ans_len=args.max_ans_len,
+            max_prompt_len=int(args.max_prompt_len[i]),
+            max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
             inference=False
         )
@@ -399,8 +448,8 @@ def main():
             tokenizer,
             model=model,
             padding="longest",
-            max_prompt_len=args.max_prompt_len,
-            max_ans_len=args.max_ans_len,
+            max_prompt_len=int(args.max_prompt_len[i]),
+            max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
             inference=True
         )

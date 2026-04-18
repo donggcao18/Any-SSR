@@ -10,7 +10,8 @@ import torch.nn.functional as F
 import json
 import os
 import time
-from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds # to be continued
+from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
+from evaluator.compute_metrics import compute_metrics, DATASET_TO_OUTPUT_LANG
 from transformers import GenerationConfig
 generation_config = GenerationConfig(
     temperature=0.1,
@@ -59,6 +60,73 @@ class CL_Base_Model:
         except:
             pass
         return perplexity
+
+    def _task_eval_from_predictions(self, task, sources_sequences, predicted_sequences, ground_truths):
+        if task in ['CodeSearchNet', 'TheVault_Csharp']:
+            calc_codebleu = False
+        else:
+            calc_codebleu = True
+        return compute_metrics(predicted_sequences, ground_truths, calc_codebleu=calc_codebleu, language=DATASET_TO_OUTPUT_LANG.get(task, None))
+
+    def task_generation_evaluation(self, task, test_dataloader, device, max_ans_len=None):
+        self.model.eval()
+        predicted_sequences = []
+        sources_sequences = []
+        ground_truths = []
+
+        if max_ans_len is None:
+            max_ans_len = getattr(self.args, "max_ans_len", 256)
+
+        progress_bar = tqdm(total=len(test_dataloader), leave=True, disable=(self.args.global_rank != 0))
+        for step, batch in enumerate(test_dataloader):
+            sources_sequences += batch['sources']
+            if 'gts' in batch:
+                ground_truths += batch['gts']
+                del batch['gts']
+            elif 'labels' in batch:
+                label_tensor = batch['labels']
+                for row in label_tensor:
+                    valid_ids = row[row != -100].detach().cpu().tolist()
+                    ground_truths.append(
+                        self.tokenizer.decode(valid_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    )
+                del batch['labels']
+            else:
+                ground_truths += [''] * len(batch['sources'])
+
+            del batch['sources']
+            batch = to_device(batch, device)
+            prompt_len = batch['input_ids'].shape[1]
+
+            with torch.no_grad():
+                pad_token_id = self.tokenizer.pad_token_id
+                if pad_token_id is None:
+                    pad_token_id = self.tokenizer.eos_token_id
+
+                generate_ids = self.model.generate(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    max_new_tokens=max_ans_len,
+                    bos_token_id=self.tokenizer.bos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=pad_token_id,
+                    generation_config=generation_config,
+                    use_cache=True,
+                )
+
+            sequences = self.tokenizer.batch_decode(
+                generate_ids[:, prompt_len:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )
+            predicted_sequences += sequences
+
+            if self.args.global_rank == 0:
+                progress_bar.update(1)
+                description = f"Test step {step}"
+                progress_bar.set_description(description, refresh=False)
+
+        return self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
 
 
     def train_one_task(self, task, i_task, epochs):

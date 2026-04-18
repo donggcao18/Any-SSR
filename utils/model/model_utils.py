@@ -13,6 +13,42 @@ from huggingface_hub import snapshot_download
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
 from transformers import LlamaForCausalLM, LlamaConfig
 
+def get_transformer_layers(model):
+    """
+    Return the nn.ModuleList of decoder blocks/layers for common HF causal LMs,
+    including OPT, LLaMA, and Qwen2 / Qwen2.5.
+
+    Works with plain models and most PEFT-wrapped models.
+    """
+    m = model
+
+    # Unwrap common wrappers gradually
+    for attr in ["module", "base_model", "model"]:
+        while hasattr(m, attr):
+            nxt = getattr(m, attr)
+            if nxt is m:
+                break
+            m = nxt
+
+            # Stop early if we already found a known layout
+            if hasattr(m, "decoder") and hasattr(m.decoder, "layers"):
+                return m.decoder.layers          # OPT
+            if hasattr(m, "layers"):
+                return m.layers                  # LLaMA / Qwen base model
+            if hasattr(m, "model") and hasattr(m.model, "layers"):
+                return m.model.layers            # LlamaForCausalLM / Qwen2ForCausalLM
+
+    # Final fallback checks
+    if hasattr(m, "decoder") and hasattr(m.decoder, "layers"):
+        return m.decoder.layers                  # OPT
+
+    if hasattr(m, "layers"):
+        return m.layers                          # direct base model
+
+    if hasattr(m, "model") and hasattr(m.model, "layers"):
+        return m.model.layers                    # Qwen2ForCausalLM / LlamaForCausalLM
+
+    raise AttributeError(f"Could not find transformer layers in object of type {type(model)}")
 
 def create_hf_model(model_class,
                     model_name_or_path,

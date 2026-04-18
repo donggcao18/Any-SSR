@@ -13,7 +13,7 @@ import numpy as np
 import os
 import hashlib
 from . import raw_datasets
-
+from datasets import load_dataset
 
 Role = Literal["system", "user", "assistant"]
 
@@ -279,6 +279,24 @@ def create_dataset(local_rank, dataset_name, output_path,
     test_dataset = get_prompt_dataset(test_dataset, raw_dataset, add_sys_prefix=add_sys_prefix)
 
     return train_dataset, eval_dataset, test_dataset
+
+def create_codetask_dataset(dataset_name, seed, num_train, num_eval, num_test):
+    data_dict = {}
+    for split in ['train', 'validation', 'test']:
+        ds = load_dataset(
+                "dongg18/CODETASK_with_instruction_pool",
+                data_files={split: f"{dataset_name}/{split}-*.parquet"},
+                split=split,
+            )
+        ds = ds.remove_columns([c for c in ds.column_names if c not in ('input', 'output')])
+        ds = ds.rename_column('input', 'prompt')
+        ds = ds.rename_column('output', 'answer')    
+        n = num_train if split == 'train' else num_eval if split == 'validation' else num_test
+        if n != -1:
+            ds = ds.shuffle(seed=seed).select(range(n))
+        data_dict[split] = ds
+
+    return data_dict
 
 
 # step 1
