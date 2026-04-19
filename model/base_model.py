@@ -68,7 +68,7 @@ class CL_Base_Model:
             calc_codebleu = True
         return compute_metrics(predicted_sequences, ground_truths, calc_codebleu=calc_codebleu, language=DATASET_TO_OUTPUT_LANG.get(task, None))
 
-    def task_generation_evaluation(self, task, test_dataloader, device, max_ans_len=None):
+    def task_generation_evaluation(self, task, test_dataloader, device, max_ans_len=None, return_predictions=False):
         self.model.eval()
         predicted_sequences = []
         sources_sequences = []
@@ -126,7 +126,18 @@ class CL_Base_Model:
                 description = f"Test step {step}"
                 progress_bar.set_description(description, refresh=False)
 
-        return self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
+        metrics = self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
+        if return_predictions:
+            prediction_rows = [
+                {
+                    "source": source,
+                    "ground-truth": gt,
+                    "prediction": pred,
+                }
+                for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
+            ]
+            return metrics, prediction_rows
+        return metrics
 
 
     def train_one_task(self, task, i_task, epochs):

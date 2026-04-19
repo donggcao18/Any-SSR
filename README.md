@@ -17,7 +17,7 @@ We recommend using the [Anaconda](https://anaconda.org/) to install the developm
 git clone --depth=1 https://github.com/ZHUANGHP/Any-SSR.git
 
 cd Any-SSR
-conda env create -n anyssr-olora
+conda create -n myenv python=3.11
 conda activate anyssr-olora
 pip install -r requirements.txt
 
@@ -31,7 +31,8 @@ FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE pip install flash-attn==2.7.2.post1 --no-bu
 
 You can use
 ```bash
-bash train_lora.sh
+mkdir logs/
+bash scripts/train_OLoRA.sh 2>&1 | tee logs/train_OLoRA.log
 ```
 to train a lora model for each task in the Trace dataset. 
 
