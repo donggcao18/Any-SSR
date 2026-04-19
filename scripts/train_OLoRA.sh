@@ -1,18 +1,16 @@
-#!/usr/bin/env bash
+#!/bin/bash
+export HF_HOME=./.cache
+export HF_DATASETS_CACHE=./.cache
 
 set -euo pipefail
 
-port=$(shuf -i25000-30000 -n1)
-
-deepspeed --master_port "$port" training/main_anamoe.py \
+python training/main_anamoe.py \
    --data_path /path/to/LLM-CL-Benchmark_5000 \
    --dataset_name all \
    --model_name_or_path Qwen/Qwen2.5-Coder-1.5B \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
    --seed 1234 \
-   --zero_stage 2 \
-   --deepspeed \
    --print_loss \
    --learning_rate 1e-4 \
    --CL_method O-LoRA \
