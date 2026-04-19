@@ -1,8 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export DS_BUILD_OPS=0
-export DS_SKIP_CUDA_CHECK=1
+
 
 set -euo pipefail
 
