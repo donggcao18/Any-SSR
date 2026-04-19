@@ -78,6 +78,29 @@ def parse_args():
     parser.add_argument("--log_file", type=str, default=None,
                         help="Path to a log file. Results are always printed to stdout; "
                              "this additionally writes them to the specified file.")
+    parser.add_argument(
+        "--log_predictions_jsonl",
+        type=str,
+        default=None,
+        help="If set, writes per-sample router predictions to this JSONL file (one record per sample).",
+    )
+    parser.add_argument(
+        "--log_topk",
+        type=int,
+        default=5,
+        help="Top-k classes to log for each sample when --log_predictions_jsonl is set.",
+    )
+    parser.add_argument(
+        "--max_log_samples",
+        type=int,
+        default=0,
+        help="Max number of samples to log per step (0 = log all).",
+    )
+    parser.add_argument(
+        "--log_weight_stats",
+        action="store_true",
+        help="When using --log_predictions_jsonl, also log weight/feature summary stats for pred/gt classes.",
+    )
     return parser.parse_args()
 
 class NewLlamaForCausalLM(LlamaForCausalLM):
@@ -204,12 +227,29 @@ def train(args):
     logger = logging.getLogger("eval_router")
     step_results = []  # list of (step, tasks_seen, correct, total, acc)
 
+    # Optional JSONL writer for per-sample prediction analysis
+    pred_f = None
+    if args.log_predictions_jsonl:
+        os.makedirs(os.path.dirname(os.path.abspath(args.log_predictions_jsonl)), exist_ok=True)
+        pred_f = open(args.log_predictions_jsonl, "a", encoding="utf-8")
+
+    def _write_pred(rec: dict):
+        if pred_f is None:
+            return
+        pred_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        pred_f.flush()
+
     def eval_router(model, infer_dataloader, step):
         model_dtype = next(model.parameters()).dtype
         fe_weight = torch.load(f'{router_weights_path}/step{step}_fe_weight.pth', map_location=model.device).to(model_dtype)
         classifier_weight = torch.load(f'{router_weights_path}/step{step}_router_weight.pth', map_location=model.device).transpose(0, 1).to(model_dtype)
         model.cls_head.weight = torch.nn.Parameter(classifier_weight)
         model.fe.weight = torch.nn.Parameter(fe_weight)
+
+        # cache for logging weight stats (shape: [num_classes, gamma])
+        W = model.cls_head.weight.detach().to(torch.float32)
+        W_n = W.norm(dim=1)
+
         with torch.no_grad():
             count = 0
             correct = 0
@@ -220,17 +260,103 @@ def train(args):
                 labels = batch['gts']
                 input_ids = batch['input_ids']
                 input_ids = input_ids.to('cuda')
-                prediction = model(input_ids).to(torch.float32)
 
-                pred_id = prediction.argmax().item()
-                if labels == [pred_id]:
+                # logits from router head (float32 for stable logging)
+                logits = model(input_ids).to(torch.float32)  # [1, n_tasks]
+
+                pred_id = logits.argmax().item()
+                gt_id = int(labels[0])
+                is_correct = (gt_id == pred_id)
+
+                if is_correct:
                     correct += 1
                 else:
                     logger.info(
                         f"  [WRONG] sample={count} "
                         f"pred={pred_id} ({inference_tasks[pred_id]}) "
-                        f"gt={labels[0]} ({inference_tasks[labels[0]]})"
+                        f"gt={gt_id} ({inference_tasks[gt_id]})"
                     )
+
+                # Per-sample logging (optional)
+                if pred_f is not None:
+                    if args.max_log_samples == 0 or count < args.max_log_samples:
+                        probs = torch.softmax(logits[0], dim=-1)
+                        topk = min(int(args.log_topk), probs.numel())
+                        top_probs, top_ids = torch.topk(probs, k=topk)
+
+                        rec = {
+                            "step": int(step),
+                            "sample": int(count),
+                            "tasks_seen": tasks_seen,
+                            "gt_id": gt_id,
+                            "gt_task": inference_tasks[gt_id],
+                            "pred_id": pred_id,
+                            "pred_task": inference_tasks[pred_id],
+                            "correct": bool(is_correct),
+                            "prob_max": float(probs.max().item()),
+                            "prob_gt": float(probs[gt_id].item()) if gt_id < probs.numel() else None,
+                            "margin_pred_minus_gt": float((probs[pred_id] - probs[gt_id]).item())
+                            if gt_id < probs.numel() else None,
+                            "topk": [
+                                {
+                                    "id": int(i.item()),
+                                    "task": inference_tasks[int(i.item())],
+                                    "prob": float(p.item()),
+                                }
+                                for i, p in zip(top_ids, top_probs)
+                            ],
+                        }
+
+                        if args.log_weight_stats:
+                            # feature vector used for classification is x = fe(mean_hidden)
+                            # we reconstruct x here to relate weights -> logits
+                            # (same preprocessing as in model.forward)
+                            outputs = model.model(input_ids=input_ids)
+                            hidden_mean = outputs[0].mean(dim=1).to(
+                                device=model.fe.weight.device, dtype=model.fe.weight.dtype
+                            )
+                            x = model.fe(hidden_mean).detach().to(torch.float32)[0]  # [gamma]
+                            x_norm = float(x.norm().item())
+
+                            def _vec_stats(v: torch.Tensor):
+                                return {
+                                    "l2": float(v.norm().item()),
+                                    "mean": float(v.mean().item()),
+                                    "std": float(v.std(unbiased=False).item()),
+                                    "abs_mean": float(v.abs().mean().item()),
+                                }
+
+                            w_pred = W[pred_id]
+                            w_gt = W[gt_id]
+
+                            # logits are dot(W, x) (bias=False)
+                            logit_pred = float(logits[0, pred_id].item())
+                            logit_gt = float(logits[0, gt_id].item())
+
+                            rec["features"] = {
+                                "x": _vec_stats(x),
+                                "x_norm": x_norm,
+                            }
+                            rec["weights"] = {
+                                "pred": {
+                                    "id": int(pred_id),
+                                    "task": inference_tasks[pred_id],
+                                    **_vec_stats(w_pred),
+                                    "cos_wx": float(torch.dot(w_pred, x).item() / (w_pred.norm().item() * (x.norm().item() + 1e-12) + 1e-12)),
+                                    "dot_wx": float(torch.dot(w_pred, x).item()),
+                                    "logit": logit_pred,
+                                },
+                                "gt": {
+                                    "id": int(gt_id),
+                                    "task": inference_tasks[gt_id],
+                                    **_vec_stats(w_gt),
+                                    "cos_wx": float(torch.dot(w_gt, x).item() / (w_gt.norm().item() * (x.norm().item() + 1e-12) + 1e-12)),
+                                    "dot_wx": float(torch.dot(w_gt, x).item()),
+                                    "logit": logit_gt,
+                                },
+                            }
+
+                        _write_pred(rec)
 
                 count += 1
 
@@ -307,6 +433,9 @@ def train(args):
     if step_results:
         avg_acc = sum(r[4] for r in step_results) / len(step_results)
         logger.info(f"Average accuracy across all steps: {avg_acc:.4f}")
+
+    if pred_f is not None:
+        pred_f.close()
 
 
 if __name__ == "__main__":
