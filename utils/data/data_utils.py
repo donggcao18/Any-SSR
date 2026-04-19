@@ -295,8 +295,8 @@ def create_codetask_dataset(dataset_name, seed, num_train, num_eval, num_test):
         ds = ds.rename_column('input', 'prompt')
         ds = ds.rename_column('output', 'answer')    
         n = num_train if split == 'train' else num_eval if split == 'validation' else num_test
-        if n != -1:
-            ds = ds.shuffle(seed=seed).select(range(n))
+        if int(n) != -1:
+            ds = ds.shuffle(seed=seed).select(range(int(n)))
         data_dict[split] = ds
 
     return data_dict
