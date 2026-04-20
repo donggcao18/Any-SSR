@@ -13,12 +13,6 @@ import time
 from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
 from evaluator.compute_metrics import compute_metrics, DATASET_TO_OUTPUT_LANG
 from transformers import GenerationConfig
-generation_config = GenerationConfig(
-    temperature=0.1,
-    do_sample=True,
-    num_return_sequences=1
-)
-
 
 class CL_Base_Model:
     def __init__(self,
@@ -36,8 +30,13 @@ class CL_Base_Model:
         self.eval_task_list = eval_task_list
         self.test_task_list = test_task_list
         self.args = args
-        
-        
+        self.generation_config = GenerationConfig(
+            do_sample=self.args.do_sample,
+            temperature=self.args.temperature,
+            top_p=self.args.top_p,
+            repetition_penalty=self.args.repetition_penalty,
+        )
+
     def perplexity_evaluation(self, eval_dataloader, device):
         # 验证集上测困惑度
         self.model.eval()
@@ -110,7 +109,7 @@ class CL_Base_Model:
                     bos_token_id=self.tokenizer.bos_token_id,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=pad_token_id,
-                    generation_config=generation_config,
+                    generation_config=self.generation_config,
                     use_cache=True,
                 )
 
@@ -138,6 +137,56 @@ class CL_Base_Model:
             ]
             return metrics, prediction_rows
         return metrics
+
+    def _resolve_max_ans_len(self, task_idx):
+        max_ans_len = getattr(self.args, "max_ans_len", 256)
+        if isinstance(max_ans_len, (list, tuple)):
+            if len(max_ans_len) == 0:
+                return 256
+            if len(max_ans_len) == 1:
+                return int(max_ans_len[0])
+            return int(max_ans_len[task_idx])
+        return int(max_ans_len)
+
+    def test_all_tasks_and_save_predictions(self):
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+
+        prediction_root = os.path.join("predictions", f"final-{self.__class__.__name__}")
+        if self.args.global_rank == 0:
+            os.makedirs(prediction_root, exist_ok=True)
+
+        final_metrics = {}
+        for task_idx, (task_name, test_dataloader) in enumerate(self.test_task_list.items()):
+            print_rank_0(
+                f"***** Final testing on task {task_name} after continual training *****",
+                self.args.global_rank,
+            )
+            test_result, prediction_rows = self.task_generation_evaluation(
+                task_name,
+                test_dataloader,
+                device,
+                max_ans_len=self._resolve_max_ans_len(task_idx),
+                return_predictions=True,
+            )
+            final_metrics[task_name] = test_result
+            print_rank_0(f"[final-test task={task_name}] result: {test_result}", self.args.global_rank)
+
+            if self.args.global_rank == 0:
+                safe_task_name = str(task_name).replace("/", "_").replace(":", "_")
+                prediction_file = os.path.join(prediction_root, f"{task_idx}_{safe_task_name}.json")
+                with open(prediction_file, "w", encoding="utf-8") as f:
+                    json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
+                print_rank_0(f"Saved final-test predictions to {prediction_file}", self.args.global_rank)
+
+        if self.args.global_rank == 0:
+            metrics_file = os.path.join(prediction_root, "metrics_summary.json")
+            with open(metrics_file, "w", encoding="utf-8") as f:
+                json.dump(final_metrics, f, ensure_ascii=False, indent=2)
+            print_rank_0(f"Saved final-test metrics to {metrics_file}", self.args.global_rank)
 
 
     def train_one_task(self, task, i_task, epochs):
@@ -189,6 +238,7 @@ class CL_Base_Model:
         for i_task, task in enumerate(self.train_task_list):
             self.train_one_task(task, i_task, int(self.args.num_train_epochs[i_task]))
             self.save_model(i_task)
+        self.test_all_tasks_and_save_predictions()
 
     
     def save_model(self, round):

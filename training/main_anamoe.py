@@ -253,7 +253,22 @@ def parse_args():
                 help='continual learning method used')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
-
+    # Generation configs
+    parser.add_argument('--do_sample',
+                        action='store_true',
+                        help='Whether to use sampling for generation.')
+    parser.add_argument('--temperature',
+                        type=float,
+                        default=0.2,
+                        help='Temperature for generation.')
+    parser.add_argument('--top_p',
+                        type=float,
+                        default=0.95,
+                        help='Top-p for generation.')
+    parser.add_argument('--repetition_penalty',
+                        type=float,
+                        default=1.2,
+                        help='Repetition penalty for generation.')
 
     return args
 

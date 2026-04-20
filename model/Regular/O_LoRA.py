@@ -176,7 +176,7 @@ class O_LoRA(CL_Base_Model):
 
             if self.args.global_rank == 0:
                 eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
-                prediction_file = os.path.join(prediction_dir, f"{eval_task_name}.json")
+                prediction_file = os.path.join(prediction_dir, f"{seen_idx}_{eval_task_name}.json")
                 with open(prediction_file, "w", encoding="utf-8") as f:
                     json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
                 print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)

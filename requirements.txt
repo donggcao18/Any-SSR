@@ -13,9 +13,6 @@ nltk==3.5
 rouge==1.0.1
 fuzzywuzzy==0.18.0
 sacrebleu==2.4.3
+quadprog==0.1.13
 tree-sitter==0.25.2
 tree-sitter-language-pack==0.7.2
-tree-sitter-c-sharp==0.23.1
-tree-sitter-embedded-template==0.25.0
-tree-sitter-language-pack==0.7.2
-tree-sitter-yaml==0.7.2

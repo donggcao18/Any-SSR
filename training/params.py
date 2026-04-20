@@ -1,6 +1,6 @@
 # from model.Dynamic_network.PP import PP
 # from model.Dynamic_network.L2P import L2P
-# from model.Regular.LwF import LwF
+from model.Regular.LwF import LwF
 # from model.Regular.EWC import EWC
 # from model.Regular.GEM import GEM
 # from model.Regular.OGD import OGD
@@ -17,7 +17,7 @@ Method2Class = {
                 # "EWC":EWC,
                 # "GEM":GEM,
                 # "OGD":OGD,
-                # "LwF":LwF,
+                "LwF":LwF,
                 # "L2P":L2P,
                 # "MbPA++":MbPAplusplus,
                 # "LFPT5":LFPT5, 

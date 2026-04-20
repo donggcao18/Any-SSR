@@ -236,6 +236,7 @@ class MbPAplusplus(CL_Base_Model):
             self.save_model(i_task)
             if self.args.global_rank<=0:
                 self.evaluate(i_task)
+        self.test_all_tasks_and_save_predictions()
         
     
     def evaluate(self, round):
