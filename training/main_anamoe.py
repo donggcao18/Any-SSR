@@ -281,8 +281,7 @@ def parse_args():
     parser.add_argument('--CL_method',
                 default=None,
                 help='continual learning method used')
-    parser = deepspeed.add_config_arguments(parser)
-    args = parser.parse_args()
+
     # Generation configs
     parser.add_argument('--do_sample',
                         action='store_true',
@@ -299,7 +298,8 @@ def parse_args():
                         type=float,
                         default=1.2,
                         help='Repetition penalty for generation.')
-
+    parser = deepspeed.add_config_arguments(parser)
+    args = parser.parse_args()
     return args
 
 
@@ -570,25 +570,35 @@ def main():
         return optimizer, lr_scheduler
     
     if args.CL_method=="PP" or args.CL_method=="L2P":
-        if "opt" in args.model_name_or_path.lower():
-            embed_tokens_shape = model.model.decoder.embed_tokens.weight.shape
-            embed_tokens = model.model.decoder.embed_tokens
-            
-            args.embed_tokens_dim = embed_tokens_shape[1]
-            args.embed_tokens_length = embed_tokens_shape[0]
-            args.embed_tokens = embed_tokens
-        elif "llama" in args.model_name_or_path.lower():
-            embed_tokens_shape = model.model.embed_tokens.weight.shape
+        embed_tokens = None
+        if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
+            # llama/qwen and many decoder-only HF models
             embed_tokens = model.model.embed_tokens
-            
-            args.embed_tokens_dim = embed_tokens_shape[1]
-            args.embed_tokens_length = embed_tokens_shape[0]
-            args.embed_tokens = embed_tokens
+        elif hasattr(model, "model") and hasattr(model.model, "decoder") and hasattr(model.model.decoder, "embed_tokens"):
+            # opt-like models
+            embed_tokens = model.model.decoder.embed_tokens
+
+        if embed_tokens is None:
+            raise ValueError(
+                f"Unsupported model architecture for {args.CL_method}: cannot locate embed_tokens on {type(model)}"
+            )
+
+        embed_tokens_shape = embed_tokens.weight.shape
+        args.embed_tokens_dim = embed_tokens_shape[1]
+        args.embed_tokens_length = embed_tokens_shape[0]
+        args.embed_tokens = embed_tokens
             
         if args.CL_method=="PP":
             args.prefix_len = 20
             args.task_length = len(train_task_list)
             model = convert_PP_model(model, args)
+            # Restrict trainable parameters for PP before DeepSpeed/optimizer init.
+            # This avoids ZeRO-2 reduction over large frozen backbone params.
+            for _, params in model.named_parameters():
+                params.requires_grad = False
+            model.model.prompt.requires_grad = True
+            for params in model.model.mlps.parameters():
+                params.requires_grad = True
             
         elif args.CL_method=="L2P":
             args.pool_size = 10

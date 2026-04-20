@@ -1,13 +1,13 @@
 import torch
 from torch import nn
-import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
 import logging, os, argparse
+import json
 
 from copy import deepcopy
-from transformers import AdamW
 from model.base_model import CL_Base_Model
+from utils.utils import print_rank_0
 
 
 class ResMLP(torch.nn.Module):
@@ -153,12 +153,30 @@ class PP(CL_Base_Model):
         self.prefix_len = prefix_len
         # Creating a trainable soft prompt
         if prefix_len>0:
+            prompt_tensor = self.model.model.prompt
+            prompt_dtype = prompt_tensor.dtype
+            if prompt_tensor.ndim >= 2:
+                prompt_width = prompt_tensor.shape[-1]
+            elif prompt_tensor.ndim == 1 and prompt_tensor.numel() > 0:
+                prompt_width = prompt_tensor.shape[0]
+            else:
+                prompt_width = self.embed_tokens_dim
+
             if prefix_path==None:
-                self.previous_prompts = torch.zeros([0, self.model.model.prompt.shape[1]],
-                                                    requires_grad=False, dtype=torch.bfloat16).to(self.device)
+                self.previous_prompts = torch.zeros(
+                    [0, prompt_width],
+                    requires_grad=False,
+                    dtype=prompt_dtype,
+                    device=self.device,
+                )
             else: # initializing previous prompts from the path
                 print('Using pre-trained progressive prompt - ' + prefix_path)
-                self.previous_prompts = torch.tensor(np.load(prefix_path), requires_grad = False).to(self.device)
+                self.previous_prompts = torch.tensor(
+                    np.load(prefix_path),
+                    requires_grad=False,
+                    dtype=prompt_dtype,
+                    device=self.device,
+                )
     
 
     # Concatenate newly learned prompt to the joint "Progressive Prompts"
@@ -171,8 +189,9 @@ class PP(CL_Base_Model):
             new_prompt = self.model.model.prompt
             # new_prompt = new_prompt.detach().cpu().numpy()
 
-        # new_prompt = torch.tensor(new_prompt, requires_grad = False).to(self.device)
-        self.previous_prompts = torch.concat([new_prompt, self.previous_prompts], axis=0)
+        # Cache historical prompts as non-grad tensors to avoid reusing stale graphs.
+        new_prompt = new_prompt.detach()
+        self.previous_prompts = torch.concat([new_prompt, self.previous_prompts.detach()], axis=0).detach()
         print('Updated progressive prompts ', self.previous_prompts.shape)
     
 
@@ -205,7 +224,7 @@ class PP(CL_Base_Model):
         '''
         if progressive:
             inputs_embeds = torch.concat([prompt.repeat(k, 1, 1),
-                                          self.previous_prompts.repeat(k, 1, 1),
+                                          self.previous_prompts.detach().repeat(k, 1, 1),
                                           inputs_embeds], axis=1)
             full_prefix_len = self.previous_prompts.shape[0] + prompt.shape[0] # prefix including all previous tasks
         else:
@@ -213,8 +232,14 @@ class PP(CL_Base_Model):
                                           inputs_embeds], axis=1)
             full_prefix_len = prompt.shape[0]
             
-        source_mask_updated = torch.concat((torch.tensor(1).to("cuda").repeat(k,full_prefix_len),
-                                             batch["attention_mask"]), axis=1)
+        source_mask_updated = torch.concat((
+            torch.ones(
+                (k, full_prefix_len),
+                dtype=batch["attention_mask"].dtype,
+                device=self.device,
+            ),
+            batch["attention_mask"]
+        ), axis=1)
 
         lm_labels = torch.concat((lm_labels[0][0].repeat(k,inputs_embeds.shape[1]-lm_labels.shape[1]),lm_labels),axis=1)
 
@@ -242,7 +267,142 @@ class PP(CL_Base_Model):
         outputs = self.model(inputs_embeds=inputs_embeds, labels=lm_labels, attention_mask=source_mask_updated)
         loss = outputs[0]
 
+        # ZeRO-2 can fail when an optimizer parameter gets no gradient in a step.
+        # Touch all PP MLP parameters with a zero-coefficient term so their grads are
+        # defined (zero) even when only one task-specific MLP is actively used.
+        if self.prefix_MLP is not None:
+            zero_aux = loss.new_zeros(())
+            for mlp_block in self.model.model.mlps:
+                for p in mlp_block.parameters():
+                    if p.requires_grad:
+                        zero_aux = zero_aux + p.sum() * 0.0
+            loss = loss + zero_aux
+
         return loss
+
+    def _build_eval_inputs_embeds(self, input_ids, attention_mask, task_num=None, progressive=True):
+        k = input_ids.shape[0]
+        inputs_embeds = self.embed_tokens(input_ids)
+
+        if self.prefix_MLP is not None and task_num is not None:
+            prompt = self.model.model.mlps[task_num](self.model.model.prompt)
+        else:
+            prompt = self.model.model.prompt
+
+        if progressive:
+            inputs_embeds = torch.concat([
+                prompt.repeat(k, 1, 1),
+                self.previous_prompts.detach().repeat(k, 1, 1),
+                inputs_embeds,
+            ], axis=1)
+            full_prefix_len = self.previous_prompts.shape[0] + prompt.shape[0]
+        else:
+            inputs_embeds = torch.concat([
+                prompt.repeat(k, 1, 1),
+                inputs_embeds,
+            ], axis=1)
+            full_prefix_len = prompt.shape[0]
+
+        source_mask_updated = torch.concat((
+            torch.ones(
+                (k, full_prefix_len),
+                dtype=attention_mask.dtype,
+                device=self.device,
+            ),
+            attention_mask,
+        ), axis=1)
+
+        return inputs_embeds, source_mask_updated
+
+    def task_generation_evaluation(self,
+                                   task,
+                                   test_dataloader,
+                                   device,
+                                   max_ans_len=None,
+                                   return_predictions=False,
+                                   task_num=None,
+                                   progressive=True):
+        self.model.eval()
+        predicted_sequences = []
+        sources_sequences = []
+        ground_truths = []
+
+        if max_ans_len is None:
+            max_ans_len = getattr(self.args, "max_ans_len", 256)
+
+        progress_bar = tqdm(total=len(test_dataloader), leave=True, disable=(self.args.global_rank != 0))
+        for step, batch in enumerate(test_dataloader):
+            sources_sequences += batch['sources']
+            if 'gts' in batch:
+                ground_truths += batch['gts']
+                del batch['gts']
+            elif 'labels' in batch:
+                label_tensor = batch['labels']
+                for row in label_tensor:
+                    valid_ids = row[row != -100].detach().cpu().tolist()
+                    ground_truths.append(
+                        self.tokenizer.decode(valid_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    )
+                del batch['labels']
+            else:
+                ground_truths += [''] * len(batch['sources'])
+
+            del batch['sources']
+            input_ids = batch['input_ids'].to(self.device)
+            attention_mask = batch['attention_mask'].to(self.device)
+
+            inputs_embeds, source_mask_updated = self._build_eval_inputs_embeds(
+                input_ids,
+                attention_mask,
+                task_num=task_num,
+                progressive=progressive,
+            )
+            prompt_len = inputs_embeds.shape[1]
+
+            with torch.no_grad():
+                pad_token_id = self.tokenizer.pad_token_id
+                if pad_token_id is None:
+                    pad_token_id = self.tokenizer.eos_token_id
+
+                generate_ids = self.model.generate(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=source_mask_updated,
+                    max_new_tokens=max_ans_len,
+                    bos_token_id=self.tokenizer.bos_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=pad_token_id,
+                    do_sample=getattr(self.args, "do_sample", True),
+                    temperature=getattr(self.args, "temperature", 0.1),
+                    top_p=getattr(self.args, "top_p", 1.0),
+                    repetition_penalty=getattr(self.args, "repetition_penalty", 1.0),
+                    num_return_sequences=1,
+                    use_cache=True,
+                )
+
+            sequences = self.tokenizer.batch_decode(
+                generate_ids[:, prompt_len:],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False
+            )
+            predicted_sequences += sequences
+
+            if self.args.global_rank == 0:
+                progress_bar.update(1)
+                description = f"Test step {step}"
+                progress_bar.set_description(description, refresh=False)
+
+        metrics = self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
+        if return_predictions:
+            prediction_rows = [
+                {
+                    "source": source,
+                    "ground-truth": gt,
+                    "prediction": pred,
+                }
+                for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
+            ]
+            return metrics, prediction_rows
+        return metrics
 
 
 
@@ -251,6 +411,9 @@ class PP(CL_Base_Model):
     def do_freeze_weights(self):
         model = self.model
         for name, param in model.named_parameters():
+            # Keep PP-specific learnable modules trainable.
+            if "model.prompt" in name or "model.mlps" in name:
+                continue
             param.requires_grad = False
 
 
@@ -272,6 +435,16 @@ class PP(CL_Base_Model):
                        task_num,
                        epochs,
                        progressive=True):
+
+        def resolve_max_ans_len(task_idx):
+            max_ans_len = self.args.max_ans_len
+            if isinstance(max_ans_len, (list, tuple)):
+                if len(max_ans_len) == 0:
+                    return 256
+                if len(max_ans_len) == 1:
+                    return int(max_ans_len[0])
+                return int(max_ans_len[task_idx])
+            return int(max_ans_len)
         
         #将新的prompt加入优化器
         # old_prompt = deepcopy(self.model.model.prompt)
@@ -285,8 +458,8 @@ class PP(CL_Base_Model):
         if self.prefix_MLP!=None:
             print('Freezing all MLPs except for ', task)
             mlp = self.model.model.mlps[task_num]
-            self.freeze_unfreeze_mlps([x for x in range(len(self.train_task_list)) if x!=task_num], requires_grad=False)
-            self.freeze_unfreeze_mlps([task_num], requires_grad=True) # unfreezing current task
+            # Keep all PP MLP params requiring grad to avoid ZeRO-2 None-grad reduction issues.
+            self.freeze_unfreeze_mlps([x for x in range(len(self.train_task_list))], requires_grad=True)
 
         model = self.model
         model.model.prompt.requires_grad=True
@@ -299,7 +472,8 @@ class PP(CL_Base_Model):
         # model.model.to(self.device)
 
         dataloader_train = self.train_task_list[task]
-        total_steps = self.args.num_train_epochs * len(dataloader_train)
+        dataloader_eval = self.eval_task_list[task]
+        total_steps = epochs * len(dataloader_train)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
 
         val_acc = []
@@ -312,7 +486,7 @@ class PP(CL_Base_Model):
 
             for step, batch in enumerate(tqdm(dataloader_train)):
                 del batch['sources']
-                batch = {k:batch[k].to('cuda') for k in batch}
+                batch = {k: batch[k].to(self.device) for k in batch}
                 if self.prefix_len>0: # prompt tuning
                     loss = self.train_step_lester(batch,
                                                   task=task if self.prefix_MLP!=None else None,
@@ -344,9 +518,95 @@ class PP(CL_Base_Model):
             # if progressive:
             #     prompt = torch.concat([prompt, self.previous_prompts], axis=0)
 
+            # Validate on current task after each epoch
+            print(f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****")
+            eval_result = self.task_generation_evaluation(
+                task,
+                dataloader_eval,
+                self.device,
+                max_ans_len=resolve_max_ans_len(task_num),
+                task_num=task_num,
+                progressive=progressive,
+            )
+            print(f"[task={task}] eval result: {eval_result}")
+
+        #### TEST on all seen tasks ####
+        trained_task_name = str(task).replace("/", "_").replace(":", "_")
+        prediction_dir = os.path.join("predictions_PP", f"{task_num}-{trained_task_name}")
+        if self.args.global_rank == 0:
+            os.makedirs(prediction_dir, exist_ok=True)
+
+        for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[:task_num+1]):
+            print(
+                f"***** Validating on {eval_task} after task training: {task} *****"
+            )
+            test_result, prediction_rows = self.task_generation_evaluation(
+                eval_task,
+                eval_dataset,
+                self.device,
+                max_ans_len=resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+                task_num=seen_idx,
+                progressive=progressive,
+            )
+            print(f"[task={eval_task}] validation result: {test_result}")
+
+            if self.args.global_rank == 0:
+                eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
+                prediction_file = os.path.join(prediction_dir, f"{seen_idx}-{eval_task_name}.json")
+                with open(prediction_file, "w", encoding="utf-8") as f:
+                    json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
+                print(f"Saved predictions to {prediction_file}")
+
         if progressive:
-            self.progress_previous_prompts(task=task)
+            self.progress_previous_prompts(task_num=task_num)
             # model.model.prompt.data = deepcopy(old_prompt.data)
+
+    def test_all_tasks_and_save_predictions(self):
+        prediction_root = os.path.join("predictions", f"final-{self.__class__.__name__}")
+        if self.args.global_rank == 0:
+            os.makedirs(prediction_root, exist_ok=True)
+
+        def resolve_max_ans_len(task_idx):
+            max_ans_len = self.args.max_ans_len
+            if isinstance(max_ans_len, (list, tuple)):
+                if len(max_ans_len) == 0:
+                    return 256
+                if len(max_ans_len) == 1:
+                    return int(max_ans_len[0])
+                return int(max_ans_len[task_idx])
+            return int(max_ans_len)
+
+        final_metrics = {}
+        for task_idx, (task_name, test_dataloader) in enumerate(self.test_task_list.items()):
+            print_rank_0(
+                f"***** Final testing on task {task_name} after continual training (PP prompt-aware) *****",
+                self.args.global_rank,
+            )
+            test_result, prediction_rows = self.task_generation_evaluation(
+                task_name,
+                test_dataloader,
+                self.device,
+                max_ans_len=resolve_max_ans_len(task_idx),
+                return_predictions=True,
+                task_num=task_idx,
+                progressive=True,
+            )
+            final_metrics[task_name] = test_result
+            print_rank_0(f"[final-test task={task_name}] result: {test_result}", self.args.global_rank)
+
+            if self.args.global_rank == 0:
+                safe_task_name = str(task_name).replace("/", "_").replace(":", "_")
+                prediction_file = os.path.join(prediction_root, f"{task_idx}_{safe_task_name}.json")
+                with open(prediction_file, "w", encoding="utf-8") as f:
+                    json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
+                print_rank_0(f"Saved final-test predictions to {prediction_file}", self.args.global_rank)
+
+        if self.args.global_rank == 0:
+            metrics_file = os.path.join(prediction_root, "metrics_summary.json")
+            with open(metrics_file, "w", encoding="utf-8") as f:
+                json.dump(final_metrics, f, ensure_ascii=False, indent=2)
+            print_rank_0(f"Saved final-test metrics to {metrics_file}", self.args.global_rank)
 
 def convert_PP_model(model, args):
     
@@ -357,7 +617,7 @@ def convert_PP_model(model, args):
         for i in range(prompt_len):
             with torch.no_grad():
                 j = np.random.randint(N) # random token
-                w = deepcopy(args.embed_tokens.weight[j].detach().cpu().numpy())
+                w = deepcopy(args.embed_tokens.weight[j].detach().to(torch.float32).cpu().numpy())
                 prompt_weigths.append(w/100)
                 # prompt_weigths.append(w)
 
