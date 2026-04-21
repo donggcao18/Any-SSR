@@ -11,7 +11,6 @@ from transformers import (
 )
 from huggingface_hub import snapshot_download
 from transformers.integrations.deepspeed import HfDeepSpeedConfig
-from transformers import LlamaForCausalLM, LlamaConfig
 
 def get_transformer_layers(model):
     """

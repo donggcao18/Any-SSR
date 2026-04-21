@@ -21,10 +21,18 @@ conda create -n anyssr-olora python=3.11
 conda activate anyssr-olora
 pip install -r requirements.txt
 
+pip uninstall torch
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE pip install flash-attn==2.7.2.post1 --no-build-isolation
 
-
 ```
+
+Create `.env` file in the root directory. Fill in your Wandb API key:
+```
+bash
+WANDB_API_KEY=your_api_key
+```
+
 ## Quick Start
 
 ### Baselines

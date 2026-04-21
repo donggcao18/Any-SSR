@@ -60,8 +60,6 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (
-    LlamaForCausalLM,
-    LlamaTokenizer,
     AutoModelForCausalLM,
     SchedulerType,
     default_data_collator,
@@ -312,11 +310,12 @@ def parse_args():
                 help='Group name for wandb logging.')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
+
     return args
 
 
 def main():
-    parsed_args = parse_args()
+    args = parse_args()
 
     class ArgsDict(dict):
         """Dictionary-style args with backward-compatible attribute access."""
@@ -325,15 +324,15 @@ def main():
         def __setattr__(self, key, value):
             self[key] = value
 
-    args = ArgsDict(vars(parsed_args))
+    args_dict = ArgsDict(vars(args))
 
 
     run = wandb.init(
         project="CL4Code",
         group=args.group_name,
         job_type="train",
-        name=args.run_name,
-        config=dict(args)
+        name=f"{args.group_name}_{args.run_name}",
+        config=dict(args_dict)
     )
 
     run.define_metric("global_step")
@@ -422,7 +421,8 @@ def main():
         from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
 
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
+            target_modules=["q_proj", "v_proj"]
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():

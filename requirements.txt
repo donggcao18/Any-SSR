@@ -16,3 +16,6 @@ sacrebleu==2.4.3
 quadprog==0.1.13
 tree-sitter==0.25.2
 tree-sitter-language-pack==0.7.2
+wandb==0.26.0
+dotenv==0.9.9
+qpth=0.0.18

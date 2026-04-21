@@ -77,6 +77,9 @@ class O_LoRA(CL_Base_Model):
                     "global_step": global_step,
                     "task_id": i_task,
                     "train/loss": loss.item(),
+                    "train/accuracy_loss": outputs.loss.item(),
+                    "train/orthogonal_loss": orthogonal_loss.item(),
+                    "train/l2_loss": l2_loss.item(),
                     "train/task_id": i_task,
                 })
                 if self.args.global_rank == 0:
