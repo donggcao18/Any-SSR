@@ -5,7 +5,7 @@ export HF_DATASETS_CACHE=./.cache
 
 # ---------- Run ----------
 python train_router_ana_continual.py \
-    --model          "codellama/CodeLlama-7b-hf" \
+    --model          "Qwen/Qwen2.5-Coder-1.5B" \
     --cuda_devices   "0,1" \
     --feature_layers 4 \
     --gamma          10000 \
@@ -20,7 +20,7 @@ python train_router_ana_continual.py \
 
 
 python eval_router_ana.py \
-    --model               "codellama/CodeLlama-7b-hf" \
+    --model               "Qwen/Qwen2.5-Coder-1.5B" \
     --cuda_devices        "0" \
     --feature_layers      4 \
     --gamma               10000 \
