@@ -23,9 +23,7 @@ import sys
 import datetime
 import wandb
 from tqdm import tqdm
-from dotenv import load_dotenv
 
-load_dotenv()
 
 class TeeLogger:
     """Duplicates stdout writes to both the terminal and a log file."""
