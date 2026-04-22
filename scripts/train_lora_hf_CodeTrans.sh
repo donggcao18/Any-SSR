@@ -26,5 +26,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --print_loss \
    --CL_method anamoe \
    --output_dir ./output_models/anamoe/CodeTrans \
+   --run_name anamoe_CodeTrans \
+   --group_name anamoe_CodeTrans \
    # --weight_decay 0. \
 
