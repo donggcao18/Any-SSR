@@ -173,13 +173,13 @@ def parse_args():
     parser.add_argument(
         "--max_prompt_len",
         type=list_of_strings,
-        default='320,320,256,130,256,256,256,256',
+        default='320,320,256,130,512,256,256,256',
         help="The maximum sequence length.",
     )
     parser.add_argument(
         "--max_ans_len",
         type=list_of_strings,
-        default='256,256,256,256,150,150,150,150',
+        default='150,256,128,120,300,128,128,128',
         help="The maximum sequence length.",
     )
 
