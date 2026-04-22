@@ -106,7 +106,6 @@ class CL_Base_Model:
                     input_ids=batch['input_ids'],
                     attention_mask=batch['attention_mask'],
                     max_new_tokens=max_ans_len,
-                    bos_token_id=self.tokenizer.bos_token_id,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=pad_token_id,
                     generation_config=self.generation_config,
