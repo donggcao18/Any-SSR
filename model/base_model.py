@@ -154,7 +154,7 @@ class CL_Base_Model:
             torch.cuda.set_device(self.args.local_rank)
             device = torch.device("cuda", self.args.local_rank)
 
-        prediction_root = os.path.join("predictions", f"final-{self.__class__.__name__}")
+        prediction_root = os.path.join(self.args.output_dir or ".", "predictions", f"final-{self.__class__.__name__}")
         if self.args.global_rank == 0:
             os.makedirs(prediction_root, exist_ok=True)
 

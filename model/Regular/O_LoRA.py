@@ -8,7 +8,12 @@ from tqdm import tqdm
 from model.base_model import CL_Base_Model
 from utils.utils import print_rank_0, to_device, get_all_reduce_mean
 from utils.model.model_utils import get_transformer_layers
-import wandb
+
+
+def _log(log_file, msg):
+    """Append a line to the log file."""
+    with open(log_file, 'a', encoding='utf-8') as f:
+        f.write(msg + '\n')
 
 class O_LoRA(CL_Base_Model):
     def __init__(self,
@@ -27,6 +32,11 @@ class O_LoRA(CL_Base_Model):
         else:
             torch.cuda.set_device(self.args.local_rank)
             self.device = torch.device("cuda", self.args.local_rank)
+
+        # Log file (rank-0 only)
+        log_dir = self.args.output_dir if self.args.output_dir else "."
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_file = os.path.join(log_dir, "training.log")
 
 
     def train_one_task(self, task, i_task, epochs):
@@ -73,20 +83,16 @@ class O_LoRA(CL_Base_Model):
                 loss = loss + orthogonal_loss * self.lamda_1 + l2_loss * self.lamda_2
                 ######################################################################
                 # Update the description to include current step and loss, if needed
-                wandb.log({
-                    "global_step": global_step,
-                    "task_id": i_task,
-                    "train/loss": loss.item(),
-                    "train/accuracy_loss": outputs.loss.item(),
-                    "train/orthogonal_loss": orthogonal_loss.item(),
-                    "train/l2_loss": l2_loss.item(),
-                    "train/task_id": i_task,
-                })
                 if self.args.global_rank == 0:
                     # Update the progress bar
                     progress_bar.update(1)
                     description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
                     progress_bar.set_description(description, refresh=False)
+                    _log(self.log_file,
+                        f"[train] task={task} epoch={epoch+1} step={global_step} "
+                        f"loss={loss.item():.6f} accuracy_loss={outputs.loss.item():.6f} "
+                        f"orthogonal_loss={orthogonal_loss.item():.6f} l2_loss={l2_loss.item():.6f}"
+                    )
 
                 self.model.backward(loss)
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
@@ -103,20 +109,13 @@ class O_LoRA(CL_Base_Model):
                 max_ans_len=int(self.args.max_ans_len[i_task]),
             )
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
-            wandb.log({
-                "epoch": epoch + 1,
-                "task_id": i_task,
-                "eval_epoch/task_id": i_task,
-                "eval_epoch/exact_match": eval_result["exact_match"],
-                "eval_epoch/bleu": eval_result["bleu"],
-                "eval_epoch/codebleu": eval_result["codebleu"],
-            })
-
-        def split_string_by_first_num(s):  
-            for i, c in enumerate(s):  
-                if c.isdigit():  
-                    return s[:i], s[i + 1:]  
-            return None, None  
+            if self.args.global_rank == 0:
+                _log(self.log_file,
+                    f"[eval_epoch] task={task} epoch={epoch+1} "
+                    f"exact_match={eval_result['exact_match']:.4f} "
+                    f"bleu={eval_result['bleu']:.4f} "
+                    f"codebleu={eval_result['codebleu']:.4f}"
+                )
 
         #### COMBINE lora with lora_new and INITIALIZE lora_new ####
         flag = 0
@@ -170,7 +169,7 @@ class O_LoRA(CL_Base_Model):
         }
 
         trained_task_name = str(task).replace("/", "_").replace(":", "_")
-        prediction_dir = os.path.join("predictions", f"{i_task}-{trained_task_name}")
+        prediction_dir = os.path.join(self.args.output_dir or ".", "predictions", f"{i_task}-{trained_task_name}")
         if self.args.global_rank == 0:
             os.makedirs(prediction_dir, exist_ok=True)
 
@@ -194,9 +193,15 @@ class O_LoRA(CL_Base_Model):
                 with open(prediction_file, "w", encoding="utf-8") as f:
                     json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
                 print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
-        wandb.log(log_dict)
+                _log(self.log_file,
+                    f"[eval_task] trained_on={task} eval_task={eval_task} "
+                    f"exact_match={test_result['exact_match']:.4f} "
+                    f"bleu={test_result['bleu']:.4f} "
+                    f"codebleu={test_result['codebleu']:.4f}"
+                )
 
 
+        #### RESET ####
         for k in state_dict:
             if "loranew_A" in k:
                 nn.init.kaiming_uniform_(state_dict[k], a=math.sqrt(5))
@@ -204,7 +209,7 @@ class O_LoRA(CL_Base_Model):
                 nn.init.zeros_(state_dict[k])
         self.model.load_state_dict(state_dict)
 
-        #### RESET ####
+        
         for name, param in self.model.named_parameters():
             if name.find("loranew_") != -1:
                 param.requires_grad = True
