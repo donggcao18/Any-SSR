@@ -108,7 +108,7 @@ class LFPT5(CL_Base_Model):
                                               eos_token_id=self.tokenizer.eos_token_id,
                                               pad_token_id=self.tokenizer.unk_token_id,
                                               temperature=0.1,
-                                              do_sample=True,
+                                              do_sample=False,
                                               num_return_sequences=1,
                                               use_cache=True
                                               )

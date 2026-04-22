@@ -225,7 +225,7 @@ def main():
                                               eos_token_id=tokenizer.eos_token_id,
                                               pad_token_id=tokenizer.unk_token_id,
                                               temperature=args.temperature,
-                                              do_sample=True,
+                                              do_sample=False,
                                               num_return_sequences=1,
                                               use_cache=True
                                               )

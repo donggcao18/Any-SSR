@@ -29,7 +29,6 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --per_device_train_batch_size 2 \
    --per_device_eval_batch_size 2 \
    --gradient_accumulation_steps 2 \
-   --do_sample \
    --temperature 0.2 \
    --top_p 0.95 \
    --repetition_penalty 1.2 

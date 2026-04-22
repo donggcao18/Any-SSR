@@ -23,4 +23,3 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --per_device_train_batch_size 8 \
    --per_device_eval_batch_size 16 \
    --gradient_accumulation_steps 2 \
-   --do_sample \

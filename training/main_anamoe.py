@@ -308,6 +308,9 @@ def parse_args():
                 type=str,
                 default=True,
                 help='Group name for wandb logging.')
+    parser.add_argument('--enable_wandb',
+                action='store_true',
+                help='Enable wandb logging.')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -327,22 +330,23 @@ def main():
     args_dict = ArgsDict(vars(args))
 
 
-    run = wandb.init(
-        project="CL4Code",
-        group=args.group_name,
-        job_type="train",
-        name=f"{args.group_name}_{args.run_name}",
-        config=dict(args_dict)
-    )
+    if args.enable_wandb:
+        run = wandb.init(
+            project="CL4Code",
+            group=args.group_name,
+            job_type="train",
+            name=f"{args.group_name}_{args.run_name}",
+            config=dict(args_dict)
+        )
 
-    run.define_metric("global_step")
-    run.define_metric("train/*", step_metric="global_step")
+        run.define_metric("global_step")
+        run.define_metric("train/*", step_metric="global_step")
 
-    run.define_metric("epoch")
-    run.define_metric("eval_epoch/*", step_metric="epoch")
+        run.define_metric("epoch")
+        run.define_metric("eval_epoch/*", step_metric="epoch")
 
-    run.define_metric("task_id")
-    run.define_metric("eval_task/*", step_metric="task_id")
+        run.define_metric("task_id")
+        run.define_metric("eval_task/*", step_metric="task_id")
 
     if args.local_rank == -1:
         device = torch.device("cuda")
@@ -513,7 +517,7 @@ def main():
     assert len(args.max_ans_len) == len(Datasets), "The max answer length should be specified for each dataset"
     
     for i, dataset in enumerate(Datasets):
-        dataset_path = os.path.join(args.data_path,dataset)
+        # dataset_path = os.path.join(args.data_path,dataset)
         # Prepare the data
         train_dataset, eval_dataset, test_dataset = create_codetask_dataset(dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i])
 

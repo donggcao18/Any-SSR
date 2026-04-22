@@ -14,7 +14,7 @@ import json
 import os
 generation_config = GenerationConfig(
     temperature=0.1,
-    do_sample=True,
+    do_sample=False,
     num_return_sequences=1
 )
 

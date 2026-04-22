@@ -172,7 +172,7 @@ def run_prediction(model, tokenizer, infer_dataloader, device, args):
                 temperature=args.temperature,
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
-                do_sample=True,
+                do_sample=False,
                 num_return_sequences=1,
                 use_cache=True,
             )

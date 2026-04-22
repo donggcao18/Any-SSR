@@ -323,7 +323,7 @@ def main():
     from transformers import GenerationConfig
     generation_config = GenerationConfig(
         temperature=args.temperature,
-        do_sample=True,
+        do_sample=False,
         num_return_sequences=1
     )
     if args.dataset_name[0] == "all":
