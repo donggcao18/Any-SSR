@@ -452,7 +452,7 @@ def main():
         from peft import get_peft_model, LoraConfig, TaskType
         
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
@@ -468,7 +468,7 @@ def main():
 
         names = [name for name, param in model.named_parameters()]
 
-        start = 0
+        start = 4
         end = 28  # Qwen2.5-Coder-1.5B has 28 layers (0-27)
         # filtered_names = [name for name in names if start <= int(name.split('.')[2]) < end]
 
