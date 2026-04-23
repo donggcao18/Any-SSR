@@ -165,15 +165,15 @@ class DataCollator:
             pad_len = actual_pad_len - len(tokenized_sources[idx]["input_ids"])
 
             if not self.inference:
-                # Right padding for training
+                # Left padding for training
                 tokenized_sources[idx]["input_ids"] = (
-                    tokenized_sources[idx]["input_ids"] + [pad_id] * pad_len
+                    [pad_id] * pad_len + tokenized_sources[idx]["input_ids"]
                 )
                 tokenized_sources[idx]["attention_mask"] = (
-                    tokenized_sources[idx]["attention_mask"] + [0] * pad_len
+                    [0] * pad_len + tokenized_sources[idx]["attention_mask"]
                 )
                 tokenized_sources[idx]["labels"] = (
-                    tokenized_sources[idx]["labels"] + [-100] * pad_len
+                    [-100] * pad_len + tokenized_sources[idx]["labels"]
                 )
                 assert (
                     len(tokenized_sources[idx]["input_ids"])
@@ -206,3 +206,127 @@ class DataCollator:
             model_inputs['gts'] = gts
 
         return model_inputs
+
+
+#   def decoder_call(self, batch, return_tensors):
+#         sources = []
+#         gts = []
+#         tokenized_sources = []
+#         actual_max_len = 0
+#         limit_len = self.max_prompt_len + self.max_ans_len if not self.inference else self.max_prompt_len
+
+#         pad_id = self.tokenizer.pad_token_id
+
+#         for instance in batch:
+#             instruction = instance['prompt']
+#             label = instance['answer']
+#             sources.append(instruction)
+#             gts.append(label)
+
+#             if not self.inference:
+#                 # Wrap instruction in input/output template to steer generation format.
+#                 formatted_prompt = f"input: {instruction}\noutput: "
+
+#                 # Tokenize prompt and label separately — no BOS (Qwen has none),
+#                 # EOS appended only at the end of the target.
+#                 tokenize_prompt = self.tokenize(
+#                     formatted_prompt, self.max_prompt_len, add_bos_token=False, add_eos_token=False
+#                 )
+#                 tokenize_label = self.tokenize(
+#                     label, self.max_ans_len, add_bos_token=False, add_eos_token=True
+#                 )
+#                 prompt_len = len(tokenize_prompt["input_ids"])
+#                 combined = {
+#                     "input_ids": tokenize_prompt["input_ids"] + tokenize_label["input_ids"],
+#                     "attention_mask": tokenize_prompt["attention_mask"] + tokenize_label["attention_mask"],
+#                     "labels": [-100] * prompt_len + tokenize_label["input_ids"].copy(),
+#                 }
+#                 tokenized_sources.append(combined)
+#             else:
+#                 if self.demonstrations is not None:
+#                     # HF tasks: dataset has already produced instruction prompt via instruction pool.
+#                     # We only prepend demonstrations + constrained header; do NOT use legacy TASK_PROMT.
+#                     if _is_hf_task(self.task):
+#                         task_prompt = CONSTRAINED_PROMPT
+#                         for demonstration in self.demonstrations:
+#                             task_prompt += demonstration["prompt"]
+#                             task_prompt += demonstration["answer"] + "\n\n"
+#                         instruction = task_prompt + instruction
+#                     else:
+#                         # Legacy TRACE tasks
+#                         task_prefix = LEGACY_TASK_PROMPT.get(self.task, "")
+#                         task_prompt = task_prefix
+#                         if self.task != "MeetingBank":
+#                             task_prompt += CONSTRAINED_PROMPT
+#                         for demonstration in self.demonstrations:
+#                             if self.task == "Py150":
+#                                 task_prompt += "Code:\n"
+#                             task_prompt += demonstration["prompt"]
+#                             task_prompt += demonstration["answer"] + "\n\n"
+
+#                         if self.task == "Py150":
+#                             task_prompt += "Code:\n"
+#                         if self.task != "Py150":
+#                             instruction = _strip_legacy_task_prefix(self.task, instruction)
+#                         instruction = task_prompt + instruction
+
+#                 # Build formatted_prompt after demonstrations have been prepended to instruction.
+#                 formatted_prompt = f"input: {instruction}\noutput: "
+
+#                 # No BOS for inference either; left-pad with pad_token_id below.
+#                 tokenize_source = self.tokenize(formatted_prompt, limit_len, add_bos_token=False, add_eos_token=False)
+#                 tokenized_sources.append(tokenize_source)
+
+#             if len(tokenized_sources[-1]["input_ids"]) > actual_max_len:
+#                 actual_max_len = len(tokenized_sources[-1]["input_ids"])
+
+#         actual_pad_len = (
+#             (actual_max_len + self.pad_to_multiple_of - 1) // self.pad_to_multiple_of * self.pad_to_multiple_of
+#         )
+
+#         for idx in range(len(tokenized_sources)):
+#             pad_len = actual_pad_len - len(tokenized_sources[idx]["input_ids"])
+
+#             if not self.inference:
+#                 # Right padding for training
+#                 tokenized_sources[idx]["input_ids"] = (
+#                     tokenized_sources[idx]["input_ids"] + [pad_id] * pad_len
+#                 )
+#                 tokenized_sources[idx]["attention_mask"] = (
+#                     tokenized_sources[idx]["attention_mask"] + [0] * pad_len
+#                 )
+#                 tokenized_sources[idx]["labels"] = (
+#                     tokenized_sources[idx]["labels"] + [-100] * pad_len
+#                 )
+#                 assert (
+#                     len(tokenized_sources[idx]["input_ids"])
+#                     == len(tokenized_sources[idx]["attention_mask"])
+#                     == len(tokenized_sources[idx]["labels"])
+#                     == actual_pad_len
+#                 )
+#             else:
+#                 # Left padding for inference
+#                 assert sum(tokenized_sources[idx]["attention_mask"]) == len(
+#                     tokenized_sources[idx]["input_ids"]
+#                 )
+#                 tokenized_sources[idx]["input_ids"] = (
+#                     [pad_id] * pad_len + tokenized_sources[idx]["input_ids"]
+#                 )
+#                 tokenized_sources[idx]["attention_mask"] = (
+#                     [0] * pad_len + tokenized_sources[idx]["attention_mask"]
+#                 )
+
+#         model_inputs = {
+#             'input_ids': torch.tensor([source["input_ids"] for source in tokenized_sources]),
+#             'attention_mask': torch.tensor([source["attention_mask"] for source in tokenized_sources]),
+#         }
+
+#         if not self.inference:
+#             model_inputs['labels'] = torch.tensor([source["labels"] for source in tokenized_sources])
+
+#         model_inputs['sources'] = sources
+#         if self.inference:
+#             model_inputs['gts'] = gts
+
+#         return model_inputs
+
