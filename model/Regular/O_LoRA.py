@@ -163,26 +163,26 @@ class O_LoRA(CL_Base_Model):
         if self.args.global_rank == 0:
             os.makedirs(prediction_dir, exist_ok=True)
 
-        for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[:i_task+1]):
-            print_rank_0(f"***** Validating on {eval_task} after task training: {task} *****", self.args.global_rank)
-            test_result, prediction_rows = self.task_generation_evaluation(
-                eval_task,
-                eval_dataset,
-                self.device,
-                max_ans_len=int(self.args.max_ans_len[seen_idx]),
-                return_predictions=True,
-            )
-            print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
-            log_dict[f"eval_task/seen_task_{eval_task}/exact_match"] = test_result["exact_match"]
-            log_dict[f"eval_task/seen_task_{eval_task}/bleu"] = test_result["bleu"]
-            log_dict[f"eval_task/seen_task_{eval_task}/codebleu"] = test_result["codebleu"]
+        # for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[i_task:i_task+1]):
+        #     print_rank_0(f"***** Validating on {eval_task} after task training: {task} *****", self.args.global_rank)
+        #     test_result, prediction_rows = self.task_generation_evaluation(
+        #         eval_task,
+        #         eval_dataset,
+        #         self.device,
+        #         max_ans_len=int(self.args.max_ans_len[seen_idx]),
+        #         return_predictions=True,
+        #     )
+        #     print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
+        #     log_dict[f"eval_task/seen_task_{eval_task}/exact_match"] = test_result["exact_match"]
+        #     log_dict[f"eval_task/seen_task_{eval_task}/bleu"] = test_result["bleu"]
+        #     log_dict[f"eval_task/seen_task_{eval_task}/codebleu"] = test_result["codebleu"]
 
-            if self.args.global_rank == 0:
-                eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
-                prediction_file = os.path.join(prediction_dir, f"{seen_idx}_{eval_task_name}.json")
-                with open(prediction_file, "w", encoding="utf-8") as f:
-                    json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
-                print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
+        #     if self.args.global_rank == 0:
+        #         eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
+        #         prediction_file = os.path.join(prediction_dir, f"{seen_idx}_{eval_task_name}.json")
+        #         with open(prediction_file, "w", encoding="utf-8") as f:
+        #             json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
+        #         print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
 
 
         #### RESET ####

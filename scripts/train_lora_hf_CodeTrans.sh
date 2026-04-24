@@ -12,11 +12,11 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --data_path "" \
    --dataset_name CodeTrans \
    --per_device_train_batch_size 8 \
-   --per_device_eval_batch_size 16 \
+   --per_device_eval_batch_size 8 \
    --gradient_accumulation_steps 2 \
    --max_prompt_len 320 \
    --max_ans_len 256 \
-   --learning_rate 1e-4 \
+   --learning_rate 1e-5 \
    --num_train_epochs 3 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
