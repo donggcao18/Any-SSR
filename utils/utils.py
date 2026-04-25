@@ -48,19 +48,23 @@ def load_hf_tokenizer(model_name_or_path, fast_tokenizer=True):
         tokenizer = LlamaTokenizer.from_pretrained(
             model_name_or_path, fast_tokenizer=fast_tokenizer)
         if tokenizer.pad_token is None:
-            # assert tokenizer.eos_token is not None
-            tokenizer.add_special_tokens({'pad_token': tokenizer.unk_token})
-            # tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-            tokenizer.padding_side = 'left'
+            pad_token = tokenizer.unk_token if tokenizer.unk_token is not None else tokenizer.eos_token
+            if pad_token is not None:
+                tokenizer.add_special_tokens({'pad_token': pad_token})
     else:
         tokenizer = AutoTokenizer.from_pretrained(
             model_name_or_path, fast_tokenizer=fast_tokenizer, trust_remote_code=True)
-        tokenizer.pad_token = tokenizer.eos_token
+        if tokenizer.pad_token is None:
+            if tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
+            elif tokenizer.unk_token is not None:
+                tokenizer.pad_token = tokenizer.unk_token
         # for falcon
         if tokenizer.bos_token is None:
             tokenizer.bos_token = tokenizer.eos_token
-        # make sure tokenizer is right pad in our logic
-        tokenizer.padding_side = 'left'
+
+    # decoder-only models should use left padding for generation correctness
+    tokenizer.padding_side = 'left'
 
     tokenizer.truncation_side = "left"
 
@@ -144,8 +148,13 @@ def get_optimizer_grouped_parameters(
             0.0,
         },
     ]
-    if not optimizer_grouped_parameters[1]["params"]:
-        optimizer_grouped_parameters.pop(1)
+
+    # Keep optimizer/scheduler group sizes stable by removing every empty group.
+    # DeepSpeed/optimizer internals may drop empty groups later, which can desync
+    # torch schedulers that were initialized with the original group count.
+    optimizer_grouped_parameters = [
+        group for group in optimizer_grouped_parameters if len(group["params"]) > 0
+    ]
 
     return optimizer_grouped_parameters
 

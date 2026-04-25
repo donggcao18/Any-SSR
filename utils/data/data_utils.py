@@ -13,7 +13,7 @@ import numpy as np
 import os
 import hashlib
 from . import raw_datasets
-
+from datasets import load_dataset
 
 Role = Literal["system", "user", "assistant"]
 
@@ -217,6 +217,9 @@ def get_raw_dataset(dataset_name, output_path, seed, local_rank, for_backbone=Fa
     if "Anthropic/hh-rlhf" in dataset_name:
         return raw_datasets.AnthropichhrlhfDataset(output_path, seed,
                                                    local_rank, dataset_name)
+    # hf multi-task code datasets — loaded from dongg18/CODETASK
+    elif isinstance(dataset_name, str) and dataset_name.startswith("hf:"):
+        return raw_datasets.CODETASKHFDataset(output_path, seed, local_rank, dataset_name)
     else:
         return raw_datasets.LocalJsonFileDataset(output_path, seed, local_rank,
                                                  dataset_name, for_backbone=for_backbone)
@@ -279,6 +282,24 @@ def create_dataset(local_rank, dataset_name, output_path,
     test_dataset = get_prompt_dataset(test_dataset, raw_dataset, add_sys_prefix=add_sys_prefix)
 
     return train_dataset, eval_dataset, test_dataset
+
+def create_codetask_dataset(dataset_name, seed, num_train, num_eval, num_test):
+    data_dict = {}
+    for split in ['train', 'validation', 'test']:
+        ds = load_dataset(
+                "dongg18/CODETASK_with_instruction_pool",
+                data_files={split: f"{dataset_name}/{split}-*.parquet"},
+                split=split,
+            )
+        ds = ds.remove_columns([c for c in ds.column_names if c not in ('input', 'output')])
+        ds = ds.rename_column('input', 'prompt')
+        ds = ds.rename_column('output', 'answer')    
+        n = num_train if split == 'train' else num_eval if split == 'validation' else num_test
+        if int(n) != -1:
+            ds = ds.shuffle(seed=seed).select(range(int(n)))
+        data_dict[split] = ds
+
+    return data_dict['train'], data_dict['validation'], data_dict['test']
 
 
 # step 1
