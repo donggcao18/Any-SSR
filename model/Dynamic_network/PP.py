@@ -219,7 +219,7 @@ class PP(CL_Base_Model):
             batch = to_device(batch, device)
             prompt_len = batch['input_ids'].shape[1]
 
-            inputs_embeds = self.embed_tokens(batch["sources"]).to(self.device)
+            inputs_embeds = self.embed_tokens(batch["input_ids"]).to(self.device)
 
             if prompt is not None:
                 batch_size = inputs_embeds.shape[0]
@@ -474,7 +474,7 @@ class PP(CL_Base_Model):
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
 
         if progressive:
-            self.progress_previous_prompts(task=task)
+            self.progress_previous_prompts(task_num=task_num)
             # model.model.prompt.data = deepcopy(old_prompt.data)
 
         # Validate on val split for all seen tasks after training on the whole task

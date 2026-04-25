@@ -28,4 +28,6 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --num_train_epochs 1 \
    --num_train 100 \
    --num_eval 50 \
-   --num_test 50
+   --num_test 50 \
+   --run_name run_1 \
+   --group_name PP_Qwen2.5-Coder-1.5B_with_instruction_pool
