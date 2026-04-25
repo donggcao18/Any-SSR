@@ -259,7 +259,11 @@ def main():
     replay_dataset_list={}
 
     def get_dataset(dataset):
-        dataset_path = os.path.join(args.data_path,dataset)
+        # hf:* datasets are dataset identifiers, not filesystem paths
+        if isinstance(dataset, str) and dataset.startswith("hf:"):
+            dataset_path = dataset
+        else:
+            dataset_path = os.path.join(args.data_path, dataset)
         # Prepare the data
         if dataset==args.replay_dataset_name:
             sample_ratio=None
@@ -278,6 +282,76 @@ def main():
             args.data_output_path,
             args.seed,
         )
+        
+        # DataLoaders creation:
+        if args.local_rank == -1:
+            train_sampler = RandomSampler(train_dataset)
+            eval_sampler = SequentialSampler(eval_dataset)
+            test_sampler = SequentialSampler(test_dataset)
+            
+
+        else:
+            train_sampler = DistributedSampler(train_dataset)
+            eval_sampler = DistributedSampler(eval_dataset)
+            test_sampler = DistributedSampler(test_dataset)
+
+
+        data_collator  = DataCollator(
+            tokenizer,
+            padding="longest",
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
+            pad_to_multiple_of=8,
+            inference=False
+        )
+        inf_data_collator = DataCollator(
+            tokenizer,
+            model=model,
+            padding="longest",
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
+            pad_to_multiple_of=8,
+            inference=True
+        )
+                
+
+        train_dataloader = DataLoader(train_dataset,
+                                    collate_fn=data_collator,
+                                    sampler=train_sampler,
+                                    batch_size=args.per_device_train_batch_size)
+
+        eval_dataloader = DataLoader(eval_dataset,
+                                    collate_fn=data_collator,
+                                    sampler=eval_sampler,
+                                    batch_size=args.per_device_eval_batch_size)
+        test_dataloader = DataLoader(test_dataset,
+                            collate_fn=inf_data_collator,
+                            sampler=test_sampler,
+                            batch_size=args.per_device_eval_batch_size)
+        return train_dataloader, replay_dataset, eval_dataloader, test_dataloader
+    
+    replay_dataloader,replay_dataset,_,_ = get_dataset(args.replay_dataset_name)
+    replay_dataset_list[args.replay_dataset_name] = replay_dataset
+
+    if args.dataset_name[0] == "all":
+        Datasets = AllDatasetName
+    else:
+        Datasets = args.dataset_name
+
+    for dataset in Datasets:
+        # hf:* datasets are dataset identifiers, not filesystem paths
+        if isinstance(dataset, str) and dataset.startswith("hf:"):
+            dataset_path = dataset
+        else:
+            dataset_path = os.path.join(args.data_path, dataset)
+
+        # Prepare the data
+        train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
+            args.local_rank,
+            dataset_path,
+            args.data_output_path,
+            args.seed,
+            distributed=True)
         
         # DataLoaders creation:
         if args.local_rank == -1:

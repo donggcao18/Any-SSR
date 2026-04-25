@@ -313,14 +313,19 @@ def main():
     else:
         Datasets = args.dataset_name
     for dataset in Datasets:
-        dataset_path = os.path.join(args.data_path,dataset)
+        # hf:* datasets are dataset identifiers, not filesystem paths
+        if isinstance(dataset, str) and dataset.startswith("hf:"):
+            dataset_path = dataset
+        else:
+            dataset_path = os.path.join(args.data_path, dataset)
+
         # Prepare the data
         train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
             args.local_rank,
             dataset_path,
             args.data_output_path,
-            args.seed
-        )
+            args.seed,
+            distributed=True)
 
         # DataLoaders creation:
         if args.local_rank == -1:

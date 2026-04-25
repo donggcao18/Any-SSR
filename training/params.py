@@ -12,7 +12,8 @@ from model.lora import lora
 
 
 
-Method2Class = {"PP":PP,
+Method2Class = {
+                "PP":PP,
                 "EWC":EWC,
                 "GEM":GEM,
                 "OGD":OGD,
@@ -23,7 +24,15 @@ Method2Class = {"PP":PP,
                 "O-LoRA":O_LoRA,
                 "base":CL_Base_Model,
                 "lora":lora,
-                "anamoe":lora}
+                "anamoe":lora
+                }
 
-AllDatasetName = ["C-STANCE","FOMC","MeetingBank","Papyrus-f","Py150","ScienceQA","ToolBench","NumGLUE-cm","NumGLUE-ds","20Minuten"]
+AllDatasetName = ["CONCODE",
+                  "CodeTrans",
+                  "CodeSearchNet",
+                  "BFP",
+                  "KodCode",
+                  "RunBugRun",
+                  "TheVault_Csharp",
+                  "CoST"]
 

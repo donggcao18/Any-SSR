@@ -5,15 +5,17 @@
 # DeepSpeed Team
 import sys
 sys.dont_write_bytecode = True
-import debugpy
 
-try:
-    # 5678 is the default attach port in the VS Code debug configurations. Unless a host and port are specified, host defaults to 127.0.0.1
-    debugpy.listen(("localhost", 9576))
-    print("Waiting for debugger attach")
-    debugpy.wait_for_client()
-except Exception as e:
-    pass
+# Optional debugger attach (disabled by default)
+import os
+if os.getenv("ANYSSR_ENABLE_DEBUGPY", "0") == "1":
+    try:
+        import debugpy
+        debugpy.listen(("localhost", int(os.getenv("ANYSSR_DEBUGPY_PORT", "9576"))))
+        print("Waiting for debugger attach")
+        debugpy.wait_for_client()
+    except Exception:
+        pass
 
 import argparse
 import os
@@ -38,7 +40,7 @@ from transformers import (
 
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
-from utils.data.data_utils import create_prompt_dataset
+from utils.data.data_utils import create_prompt_dataset, create_codetask_dataset
 from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
@@ -46,11 +48,14 @@ from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_line
 from utils.model.model_utils import create_hf_model
 
 # add flash attention
-from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
-from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
+try:
+    from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
+    from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
 
-replace_llama_attn_with_flash_attn()
-replace_bloom_attn_with_flash_attn()
+    replace_llama_attn_with_flash_attn()
+    replace_bloom_attn_with_flash_attn()
+except Exception:
+    print("[INFO] flash-attn is unavailable; fallback to standard attention.")
 
 # my_peft中修改了lora相关的逻辑
 from model.Replay.LFPT5 import getInitialPrompt
@@ -62,6 +67,54 @@ from params import Method2Class, AllDatasetName
 
 
 # TODO, check support for OPT and llama
+
+
+class SingleGPUModelWrapper:
+    """Mimics the DeepSpeed engine API for single-GPU training without deepspeed.init_distributed()."""
+
+    def __init__(self, model, optimizer, lr_scheduler, gradient_accumulation_steps=1):
+        self.module = model
+        self._optimizer = optimizer
+        self._lr_scheduler = lr_scheduler
+        self._gradient_accumulation_steps = gradient_accumulation_steps
+        self._micro_step = 0
+        self._optimizer.zero_grad()
+
+    def __call__(self, **kwargs):
+        return self.module(**kwargs)
+
+    def named_parameters(self):
+        return self.module.named_parameters()
+
+    def parameters(self):
+        return self.module.parameters()
+
+    def eval(self):
+        self.module.eval()
+        return self
+
+    def train(self, mode=True):
+        self.module.train(mode)
+        return self
+
+    def backward(self, loss):
+        (loss / self._gradient_accumulation_steps).backward()
+
+    def step(self):
+        self._micro_step += 1
+        if self._micro_step % self._gradient_accumulation_steps == 0:
+            self._optimizer.step()
+            self._lr_scheduler.step()
+            self._optimizer.zero_grad()
+
+    def gradient_checkpointing_enable(self):
+        self.module.gradient_checkpointing_enable()
+
+    def generate(self, **kwargs):
+        return self.module.generate(**kwargs)
+
+    def save_pretrained(self, *args, **kwargs):
+        self.module.save_pretrained(*args, **kwargs)
 
 
 def parse_args():
@@ -106,15 +159,15 @@ def parse_args():
     )
     parser.add_argument(
         "--max_prompt_len",
-        type=int,
-        default=512,
-        help="The maximum sequence length.",
+        type=list_of_strings,
+        default='320',
+        help="The maximum sequence length (per dataset, comma-separated).",
     )
     parser.add_argument(
         "--max_ans_len",
-        type=int,
-        default=512,
-        help="The maximum sequence length.",
+        type=list_of_strings,
+        default='256',
+        help="The maximum sequence length (per dataset, comma-separated).",
     )
 
     parser.add_argument(
@@ -196,6 +249,49 @@ def parse_args():
     parser.add_argument('--print_loss',
                         action='store_true',
                         help='Prints loss at each step.')
+    parser.add_argument('--logging_steps',
+                        type=int,
+                        default=10,
+                        help='Log training loss every N steps.')
+    parser.add_argument('--num_train',
+                        type=list_of_strings,
+                        default='-1',
+                        help='Number of training examples per dataset, -1 = all.')
+    parser.add_argument('--num_eval',
+                        type=list_of_strings,
+                        default='-1',
+                        help='Number of eval examples per dataset, -1 = all.')
+    parser.add_argument('--num_test',
+                        type=list_of_strings,
+                        default='-1',
+                        help='Number of test examples per dataset, -1 = all.')
+    parser.add_argument('--lora_dim',
+                        type=int,
+                        default=16,
+                        help='LoRA rank.')
+    parser.add_argument('--lora_alpha',
+                        type=int,
+                        default=32,
+                        help='LoRA alpha.')
+    parser.add_argument('--lora_dropout',
+                        type=float,
+                        default=0.1,
+                        help='LoRA dropout.')
+    parser.add_argument('--do_sample',
+                        action='store_true',
+                        help='Use sampling for generation.')
+    parser.add_argument('--temperature',
+                        type=float,
+                        default=0.2,
+                        help='Generation temperature.')
+    parser.add_argument('--top_p',
+                        type=float,
+                        default=0.95,
+                        help='Generation top-p.')
+    parser.add_argument('--repetition_penalty',
+                        type=float,
+                        default=1.2,
+                        help='Repetition penalty.')
     # added by wangxiao
     parser.add_argument('--CL_method',
                 default=None,
@@ -203,7 +299,7 @@ def parse_args():
     
     args = parser.parse_args()
 
-    args.global_rank = -1
+    args.global_rank = 0
 
 
     return args
@@ -282,7 +378,30 @@ def main():
         for name, param in model.named_parameters():
             if name.find("lora") != -1:
                 param.requires_grad = True
-    
+
+    if args.CL_method == "anamoe":
+        from peft import get_peft_model, LoraConfig, TaskType
+
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+        )
+
+        names = [name for name, param in model.named_parameters()]
+        start = 4
+        end = 28  # Qwen2.5-Coder-1.5B has 28 layers (0-27)
+        filtered_names = [
+            name[:-7] for name in names
+            if name.startswith("model.layers.")
+            and start <= int(name.split('.')[2]) < end
+        ]
+        filtered_names = [name for name in filtered_names if 'layernorm' not in name]
+        filtered_names = [name for name in filtered_names if 'k_proj' not in name]
+        filtered_names = [name for name in filtered_names if 'o_proj' not in name]
+        filtered_names = [name for name in filtered_names if 'mlp' not in name]
+        peft_config.target_modules = filtered_names
+
+        model = get_peft_model(model, peft_config)
+
     train_task_list = {}
     eval_task_list = {}
     test_task_list = {}
@@ -292,33 +411,34 @@ def main():
         Datasets = AllDatasetName
     else:
         Datasets = args.dataset_name
-    for dataset in Datasets:
-        dataset_path = os.path.join(args.data_path,dataset)
+
+    if len(args.num_train) == 1:
+        args.num_train = [args.num_train[0]] * len(Datasets)
+    if len(args.num_eval) == 1:
+        args.num_eval = [args.num_eval[0]] * len(Datasets)
+    if len(args.num_test) == 1:
+        args.num_test = [args.num_test[0]] * len(Datasets)
+    if len(args.max_prompt_len) == 1:
+        args.max_prompt_len = [args.max_prompt_len[0]] * len(Datasets)
+    if len(args.max_ans_len) == 1:
+        args.max_ans_len = [args.max_ans_len[0]] * len(Datasets)
+
+    for i, dataset in enumerate(Datasets):
         # Prepare the data
-        train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
-            args.local_rank,
-            dataset_path,
-            args.data_output_path,
-            args.seed,
-            distributed=False
+        train_dataset, eval_dataset, test_dataset = create_codetask_dataset(
+            dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i]
         )
 
         # DataLoaders creation:
-        if args.local_rank == -1:
-            train_sampler = RandomSampler(train_dataset)
-            eval_sampler = SequentialSampler(eval_dataset)
-            test_sampler = SequentialSampler(test_dataset)
-
-        else:
-            train_sampler = DistributedSampler(train_dataset)
-            eval_sampler = DistributedSampler(eval_dataset)
-            test_sampler = DistributedSampler(test_dataset)
+        train_sampler = RandomSampler(train_dataset)
+        eval_sampler = SequentialSampler(eval_dataset)
+        test_sampler = SequentialSampler(test_dataset)
 
         data_collator = DataCollator(
             tokenizer,
             padding="longest",
-            max_prompt_len=args.max_prompt_len,
-            max_ans_len=args.max_ans_len,
+            max_prompt_len=int(args.max_prompt_len[i]),
+            max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
             inference=False
         )
@@ -326,8 +446,8 @@ def main():
             tokenizer,
             model=model,
             padding="longest",
-            max_prompt_len=args.max_prompt_len,
-            max_ans_len=args.max_ans_len,
+            max_prompt_len=int(args.max_prompt_len[i]),
+            max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
             inference=True
         )
@@ -338,7 +458,7 @@ def main():
                                     sampler=train_sampler,
                                     batch_size=args.per_device_train_batch_size)
         eval_dataloader = DataLoader(eval_dataset,
-                                    collate_fn=data_collator,
+                                    collate_fn=inf_data_collator,
                                     sampler=eval_sampler,
                                     batch_size=args.per_device_eval_batch_size)
         test_dataloader = DataLoader(test_dataset,
@@ -426,6 +546,7 @@ def main():
                 if "prompt" not in name:
                     params.requires_grad=False
                     
+    model.to(device)
     optimizer, lr_scheduler = get_optimizer(model)
     # model, optimizer, _, lr_scheduler = deepspeed.initialize(
     #     model=model,
@@ -449,7 +570,8 @@ def main():
     # Initialize the global progress bar
 
     if args.CL_method in Method2Class.keys():
-        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
+        wrapped_model = SingleGPUModelWrapper(model, optimizer, lr_scheduler, args.gradient_accumulation_steps)
+        CL_Trainer = Method2Class[args.CL_method](wrapped_model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         CL_Trainer.train_continual()
 
 
