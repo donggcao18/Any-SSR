@@ -234,7 +234,8 @@ def train():
             count = 0
             print('-----------------------start training-------------------')
             
-            for steps, batch in enumerate(infer_dataloader):
+            pbar = tqdm(infer_dataloader, desc=f"[Step {step}] Initial training", unit="batch")
+            for steps, batch in enumerate(pbar):
                 labels = batch['gts']
                 input_ids = batch['input_ids'].to('cuda')
                 
@@ -253,6 +254,7 @@ def train():
                     crs_cor += torch.t(new_activation) @ (label_onehot)
                 
                 count += 1
+                pbar.set_postfix(batches=count)
             
             print('Calculating Reverse')
 
@@ -279,7 +281,8 @@ def train():
             count = 0
             print('-----------------------Start Recursive Train-------------------')
             
-            for steps, batch in enumerate(infer_dataloader):
+            pbar = tqdm(infer_dataloader, desc=f"[Step {step}] Recursive training", unit="batch")
+            for steps, batch in enumerate(pbar):
                 labels = batch['gts']
                 input_ids = batch['input_ids'].to('cuda')
                 
@@ -291,6 +294,7 @@ def train():
                 prev_R = prev_R - prev_R @ new_activation.t() @ torch.pinverse(torch.eye(new_activation.shape[0]).to('cuda') +
                                                                     new_activation @ prev_R @ new_activation.t()) @ new_activation @ prev_R
                 prev_Delta = prev_Delta + prev_R @ new_activation.t() @ (label_onehot - new_activation @ prev_Delta)
+                pbar.set_postfix(batches=steps + 1)
             
             print('Calculate new R')
             new_R = prev_R
