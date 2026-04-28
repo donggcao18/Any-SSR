@@ -215,6 +215,9 @@ def train():
     inference_tasks = TASK_LIST
     import numpy as np
 
+    logger = logging.getLogger("eval_router")
+    step_results = []  # list of (step, correct, total, acc)
+
     def eval_router(model, infer_dataloader, step):
         model_dtype = next(model.parameters()).dtype
         fe_weight = torch.load(f'{router_weights_path}/step{step}_fe_weight.pth', map_location=model.device).to(model_dtype)
@@ -224,22 +227,30 @@ def train():
         with torch.no_grad():
             count = 0
             correct = 0
-            print(f'-----------------------start evaluation of step {step}-------------------')
+            logger.info("-" * 60)
+            logger.info(f"Step {step} | Tasks: {inference_tasks[:step + 1]}")
+            logger.info("-" * 60)
             for steps, batch in enumerate(infer_dataloader):
                 labels = batch['gts']
                 input_ids = batch['input_ids']
                 input_ids = input_ids.to('cuda')
                 prediction = model(input_ids).to(torch.float32)
 
-                if labels == [prediction.argmax().item()]:
+                pred_id = prediction.argmax().item()
+                if labels == [pred_id]:
                     correct += 1
                 else:
-                    print(f'prediction: {prediction.argmax().item()}, labels: {labels}')
+                    logger.info(
+                        f"  [WRONG] sample={count} "
+                        f"pred={pred_id} ({inference_tasks[pred_id]}) "
+                        f"gt={labels[0]} ({inference_tasks[labels[0]]})"
+                    )
                 
                 count += 1
                 
             acc = correct / count
-            print(f'step{step} has an acc of：{acc}')
+            logger.info(f"Step {step} | correct={correct}/{count} | acc={acc:.4f}")
+            step_results.append((step, correct, count, acc))
 
     # for i in range(0, len(inference_tasks) - 1):
     for i in range(0, len(inference_tasks)):
@@ -284,8 +295,20 @@ def train():
                                         batch_size=1)
 
         # Inference !
-        # print("***** Start evaluation *****")
         eval_router(model, infer_dataloader, i)
+
+    # ---- Final summary ----
+    logger.info("=" * 60)
+    logger.info("ROUTER EVALUATION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"{'Step':<6} {'#Tasks':<8} {'Correct':<10} {'Total':<10} {'Acc':<10}")
+    logger.info("-" * 60)
+    for step, correct, total, acc in step_results:
+        logger.info(f"{step:<6} {step + 1:<8} {correct:<10} {total:<10} {acc:<10.4f}")
+    logger.info("=" * 60)
+    if step_results:
+        avg_acc = sum(r[3] for r in step_results) / len(step_results)
+        logger.info(f"Average accuracy across all steps: {avg_acc:.4f}")
 
 
 if __name__ == "__main__":
