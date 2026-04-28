@@ -359,7 +359,7 @@ def train():
             infer_dataset,
             collate_fn=inf_data_collator,
             sampler=infer_sampler,
-            batch_size=1
+            batch_size=8
         )
 
         print("***** Start Training *****")
