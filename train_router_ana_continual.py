@@ -1,7 +1,10 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+import argparse
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2 import Qwen2ForCausalLM
+from transformers.models.qwen2 import Qwen2Model
+from transformers.models.llama import LlamaForCausalLM, LlamaModel
 import torch
 from torch.nn import CrossEntropyLoss
 from typing import Optional, List, Tuple, Union
@@ -12,10 +15,6 @@ import logging
 from transformers.cache_utils import Cache, DynamicCache
 
 from transformers.utils import logging
-
-from transformers.models.llama import LlamaModel
-
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaSdpaAttention, LlamaConfig, LlamaRMSNorm, LlamaRotaryEmbedding, LlamaAttention, LlamaFlashAttention2, LlamaMLP, repeat_kv, apply_rotary_pos_emb
 
 import torch.nn as nn
 
@@ -34,41 +33,82 @@ from tqdm import tqdm
 
 from peft import get_peft_model
 
-from utils.data.data_utils import create_prompt_dataset
+from utils.data.data_utils import create_codetask_dataset, create_executable_dataset, PromptDataset
 from utils.data.data_collator import DataCollator
+from utils.data.hf_task_specs import TASK_LIST
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from training.params import AllDatasetNameExecutable
 
 import torch.nn.functional as F
 
-LLAMA_ATTENTION_CLASSES = {
-    "eager": LlamaAttention,
-    "flash_attention_2": LlamaFlashAttention2,
-    "sdpa": LlamaSdpaAttention,
-}
-
 feature_layers = 4
-gamma = 10000
-router_weights_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/router_weights'
-dataset_path = '/U_PZL2023ZZ0005/rhe/dataset/TRACE-Benchmark/LLM-CL-Benchmark_5000/'
-dataset_cache_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/outputs_router_dataset_cache'
-paths = [router_weights_path,dataset_cache_path]
+gamma_global = 5000
+    
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train router for continual learning.")
+    parser.add_argument(
+        "--model_name_or_path",
+        type=str,
+        default="Qwen/Qwen2.5-Coder-1.5B",
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--router_weights_path",
+        type=str,
+        default=f"./output_models/router_weights_qwencoder_gamma{gamma_global}_batch1",
+        help="Path to store router weights.",
+    )
+    parser.add_argument(
+        "--dataset_cache_path",
+        type=str,
+        default=f"./output_models/outputs_router_dataset_cache_qwencoder_gamma{gamma_global}_batch1",
+        help="Path to store dataset cache.",
+    )
+    parser.add_argument(
+        "--max_prompt_len",
+        type=int,
+        default=512,
+        help="Maximum prompt length.",
+    )
+    parser.add_argument(
+        "--max_ans_len",
+        type=int,
+        default=256,
+        help="Maximum answer length.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Batch size for router training.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        choices=["executable", "non-executable"],
+        default="non-executable",
+        help="Benchmark to be evaluated: executable or non-executable.",
+    )
+    return parser.parse_args()
 
-for path in paths:
-    if not os.path.exists(path):
-        os.makedirs(path)
 
-class NewLlamaForCausalLM(LlamaForCausalLM):
+def ensure_dirs(paths):
+    for path in paths:
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+class NewQwen2ForCausalLM(Qwen2ForCausalLM):
     _tied_weights_keys = ["lm_head.weight"]
     def __init__(self, config, task_number, gamma):
         super().__init__(config)
-        self.model = LlamaModel(config)
+        self.model = Qwen2Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         self.model.layers = torch.nn.ModuleList(self.model.layers[:feature_layers])  # 仅取前4层进行分类
 
-        # self.cls_head = torch.nn.Linear(in_features=4096, out_features=task_number)
-        self.fe = torch.nn.Linear(in_features=4096, out_features=gamma)
+        # self.cls_head = torch.nn.Linear(in_features=config.hidden_size, out_features=task_number)
+        self.fe = torch.nn.Linear(in_features=config.hidden_size, out_features=gamma)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -142,28 +182,87 @@ class NewLlamaForCausalLM(LlamaForCausalLM):
     def MoeClassifier():
         pass
 
-def load_model_and_tokenizer():
-    model = NewLlamaForCausalLM.from_pretrained(
-                'meta-llama/Llama-2-7b-chat-hf',
+
+class NewLlamaForCausalLM(LlamaForCausalLM):
+    _tied_weights_keys = ["lm_head.weight"]
+    def __init__(self, config, task_number, gamma):
+        super().__init__(config)
+        self.model = LlamaModel(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        self.model.layers = torch.nn.ModuleList(self.model.layers[:feature_layers])
+
+        # self.cls_head = torch.nn.Linear(in_features=config.hidden_size, out_features=task_number)
+        self.fe = torch.nn.Linear(in_features=config.hidden_size, out_features=gamma)
+
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        cache_position=None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
+
+        hidden_mean = outputs[0].mean(dim=1)
+        return self.fe(hidden_mean)
+
+    def MoeClassifier():
+        pass
+
+
+def load_model_and_tokenizer(model_name_or_path):
+    if 'qwen' in model_name_or_path.lower():
+        ModelClass = NewQwen2ForCausalLM
+    else:
+        ModelClass = NewLlamaForCausalLM
+
+    model = ModelClass.from_pretrained(
+                model_name_or_path,
                 device_map="auto",
                 torch_dtype="auto",
                 task_number=8,
                 trust_remote_code=True,
-                gamma=10000
+                gamma=gamma_global
             )
-    
+
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        'meta-llama/Llama-2-7b-chat-hf', trust_remote_code=True
+        model_name_or_path, trust_remote_code=True
     )
 
     return model, tokenizer
 
-def train():
+def train(args):
     num_epochs = 1
     max_length = 150
 
 
-    model, tokenizer = load_model_and_tokenizer()
+    model, tokenizer = load_model_and_tokenizer(args.model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
     for name, param in model.named_parameters():
@@ -172,7 +271,10 @@ def train():
         else:
             print(1)
 
-    inference_tasks = ['NumGLUE-cm','NumGLUE-ds','FOMC','20Minuten','C-STANCE','Py150','MeetingBank','ScienceQA']
+    if args.benchmark == "executable":
+        inference_tasks = AllDatasetNameExecutable
+    else:
+        inference_tasks = TASK_LIST
     import numpy as np
 
     def train_initial_router(model, infer_dataloader, step):
@@ -183,7 +285,8 @@ def train():
             count = 0
             print('-----------------------start training-------------------')
             
-            for steps, batch in enumerate(infer_dataloader):
+            pbar = tqdm(infer_dataloader, desc=f"[Step {step}] Initial training", unit="batch")
+            for steps, batch in enumerate(pbar):
                 labels = batch['gts']
                 input_ids = batch['input_ids'].to('cuda')
                 
@@ -202,10 +305,11 @@ def train():
                     crs_cor += torch.t(new_activation) @ (label_onehot)
                 
                 count += 1
+                pbar.set_postfix(batches=count)
             
             print('Calculating Reverse')
 
-            R = np.mat(auto_cor.cpu().numpy() + 100 * np.eye(gamma)).I
+            R = np.mat(auto_cor.cpu().numpy() + 100 * np.eye(gamma_global)).I
             R_tensor = torch.tensor(R).float().cuda(non_blocking=True).cpu()
             Delta = R_tensor @ crs_cor.cpu()
             
@@ -228,7 +332,8 @@ def train():
             count = 0
             print('-----------------------Start Recursive Train-------------------')
             
-            for steps, batch in enumerate(infer_dataloader):
+            pbar = tqdm(infer_dataloader, desc=f"[Step {step}] Recursive training", unit="batch")
+            for steps, batch in enumerate(pbar):
                 labels = batch['gts']
                 input_ids = batch['input_ids'].to('cuda')
                 
@@ -240,6 +345,7 @@ def train():
                 prev_R = prev_R - prev_R @ new_activation.t() @ torch.pinverse(torch.eye(new_activation.shape[0]).to('cuda') +
                                                                     new_activation @ prev_R @ new_activation.t()) @ new_activation @ prev_R
                 prev_Delta = prev_Delta + prev_R @ new_activation.t() @ (label_onehot - new_activation @ prev_Delta)
+                pbar.set_postfix(batches=steps + 1)
             
             print('Calculate new R')
             new_R = prev_R
@@ -265,34 +371,30 @@ def train():
         if i == 0:
             for inference_task_id in range(len(cur_inference_tasks)):    
                 inference_task = inference_tasks[inference_task_id]
-                cur_dataset_path = os.path.join(dataset_path, inference_task)
-                
-                train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
-                    -1,
-                    cur_dataset_path,
-                    dataset_cache_path,
-                    42,
-                    distributed=False
+
+                if args.benchmark == "executable":
+                    hf_train, _, _ = create_executable_dataset(inference_task, 42, -1, -1, -1)
+                else:
+                    hf_train, _, _ = create_codetask_dataset(inference_task, 42, -1, -1, -1)
+                train_dataset = PromptDataset(
+                    list(hf_train['prompt']),
+                    [inference_task_id for _ in hf_train]
                 )
-                # set the label for router training
-                train_dataset.answer_dataset = [inference_task_id for _ in train_dataset.answer_dataset]
                 all_datasets.append(train_dataset)
         else:
             # inference_task = inference_tasks[i+1] # Revise to +1 
             inference_task = inference_tasks[i] # Revise to +1 
             inference_task_id = i
-            cur_dataset_path = os.path.join(dataset_path, inference_task)
-                
+
             # data preparation
-            train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
-                -1,
-                cur_dataset_path,
-                dataset_cache_path,
-                42,
-                distributed=False
+            if args.benchmark == "executable":
+                hf_train, _, _ = create_executable_dataset(inference_task, 42, -1, -1, -1)
+            else:
+                hf_train, _, _ = create_codetask_dataset(inference_task, 42, -1, -1, -1)
+            train_dataset = PromptDataset(
+                list(hf_train['prompt']),
+                [inference_task_id for _ in hf_train]
             )
-            # set the label for router training
-            train_dataset.answer_dataset = [inference_task_id for _ in train_dataset.answer_dataset]
             all_datasets.append(train_dataset)
         
         try:
@@ -304,8 +406,8 @@ def train():
             tokenizer,
             model=model,
             padding="longest",
-            max_prompt_len=512,
-            max_ans_len=256,
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
             inference=True
         )
@@ -314,7 +416,7 @@ def train():
             infer_dataset,
             collate_fn=inf_data_collator,
             sampler=infer_sampler,
-            batch_size=1
+            batch_size=args.batch_size,
         )
 
         print("***** Start Training *****")
@@ -335,4 +437,8 @@ if __name__ == "__main__":
     print(
         "-----------------------------------start training---------------------------------------"
     )
-    train()
+    args = parse_args()
+    router_weights_path = args.router_weights_path
+    dataset_cache_path = args.dataset_cache_path
+    ensure_dirs([router_weights_path, dataset_cache_path])
+    train(args)

@@ -1,7 +1,9 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+import argparse
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-from transformers.models.llama import LlamaForCausalLM
+from transformers.models.qwen2 import Qwen2ForCausalLM, Qwen2Model
+from transformers.models.llama import LlamaForCausalLM, LlamaModel
 import torch
 from torch.nn import CrossEntropyLoss
 from typing import Optional, List, Tuple, Union
@@ -12,10 +14,6 @@ import logging
 from transformers.cache_utils import Cache, DynamicCache
 
 from transformers.utils import logging
-
-from transformers.models.llama import LlamaModel
-
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaSdpaAttention, LlamaConfig, LlamaRMSNorm, LlamaRotaryEmbedding, LlamaAttention, LlamaFlashAttention2, LlamaMLP, repeat_kv, apply_rotary_pos_emb
 
 import torch.nn as nn
 
@@ -34,22 +32,118 @@ from tqdm import tqdm
 
 from peft import get_peft_model
 
-from utils.data.data_utils import create_prompt_dataset
+from utils.data.data_utils import create_codetask_dataset, create_executable_dataset, PromptDataset
 from utils.data.data_collator import DataCollator
+from utils.data.hf_task_specs import TASK_LIST
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from training.params import AllDatasetNameExecutable
 
 import torch.nn.functional as F
 
-LLAMA_ATTENTION_CLASSES = {
-    "eager": LlamaAttention,
-    "flash_attention_2": LlamaFlashAttention2,
-    "sdpa": LlamaSdpaAttention,
-}
 feature_layers = 4
-gamma = 10000
-router_weights_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/router_weights'
-dataset_path = '/U_PZL2023ZZ0005/rhe/dataset/TRACE-Benchmark/LLM-CL-Benchmark_5000/'
-dataset_cache_path = '/U_PZL2023ZZ0005/rhe/Any-SSR/output_models/outputs_router_dataset_cache'
+gamma = 5000
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate router for continual learning.")
+    parser.add_argument(
+        "--model_name_or_path",
+        type=str,
+        default="Qwen/Qwen2.5-Coder-1.5B",
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--router_weights_path",
+        type=str,
+        default="./output_models/router_weights_qwen_gamma5000",
+        help="Path to router weights.",
+    )
+    parser.add_argument(
+        "--dataset_cache_path",
+        type=str,
+        default="./output_models/router_weights_qwen_gamma5000",
+        help="Path to dataset cache.",
+    )
+    parser.add_argument(
+        "--max_prompt_len",
+        type=int,
+        default=512,
+        help="Maximum prompt length.",
+    )
+    parser.add_argument(
+        "--max_ans_len",
+        type=int,
+        default=256,
+        help="Maximum answer length.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Batch size for router evaluation.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        choices=["executable", "non-executable"],
+        default="non-executable",
+        help="Benchmark to be evaluated: executable or non-executable.",
+    )
+    return parser.parse_args()
+
+class NewQwen2ForCausalLM(Qwen2ForCausalLM):
+    _tied_weights_keys = ["lm_head.weight"]
+    def __init__(self, config, task_number, gamma):
+        super().__init__(config)
+        self.model = Qwen2Model(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        self.model.layers = torch.nn.ModuleList(self.model.layers[:feature_layers])  # 仅取前4层进行分类
+
+        self.fe = torch.nn.Linear(in_features=config.hidden_size, out_features=gamma)
+        self.cls_head = torch.nn.Linear(in_features=gamma, out_features=task_number)
+
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        cache_position=None,
+    ):
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
+
+        hidden_mean = outputs[0].mean(dim=1)
+        out = self.fe(hidden_mean)
+        return self.cls_head(out)
+
+    def MoeClassifier():
+        pass
+
 
 class NewLlamaForCausalLM(LlamaForCausalLM):
     _tied_weights_keys = ["lm_head.weight"]
@@ -59,11 +153,9 @@ class NewLlamaForCausalLM(LlamaForCausalLM):
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-        self.model.layers = torch.nn.ModuleList(self.model.layers[:4])  # 仅取前4层进行分类
+        self.model.layers = torch.nn.ModuleList(self.model.layers[:feature_layers])  # 仅取前4层进行分类
 
-        # self.cls_head = torch.nn.Linear(in_features=4096, out_features=task_number)
-        self.fe = torch.nn.Linear(in_features=4096, out_features=gamma)
-
+        self.fe = torch.nn.Linear(in_features=config.hidden_size, out_features=gamma)
         self.cls_head = torch.nn.Linear(in_features=gamma, out_features=task_number)
         # Initialize weights and apply final processing
         self.post_init()
@@ -138,9 +230,14 @@ class NewLlamaForCausalLM(LlamaForCausalLM):
     def MoeClassifier():
         pass
 
-def load_model_and_tokenizer(step):
-    model = NewLlamaForCausalLM.from_pretrained(
-               '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf',
+def load_model_and_tokenizer(step, model_name_or_path):
+    if 'qwen' in model_name_or_path.lower():
+        ModelClass = NewQwen2ForCausalLM
+    else:
+        ModelClass = NewLlamaForCausalLM
+
+    model = ModelClass.from_pretrained(
+                model_name_or_path,
                 device_map="auto",
                 torch_dtype="auto",
                 # task_number=step+2,
@@ -148,52 +245,69 @@ def load_model_and_tokenizer(step):
                 trust_remote_code=True,
                 gamma=gamma
             )
-    
+
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf', trust_remote_code=True
+        model_name_or_path, trust_remote_code=True
     )
 
     return model, tokenizer
 
-def load_tokenizer():
+def load_tokenizer(model_name_or_path):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
-        '/U_PZL2023ZZ0005/rhe/ICML2026/meta-llama/Llama-2-7b-chat-hf', trust_remote_code=True
+        model_name_or_path, trust_remote_code=True
     )
 
     return tokenizer
 
-def train():
-    inference_tasks = ['NumGLUE-cm','NumGLUE-ds','FOMC','20Minuten','C-STANCE','Py150','MeetingBank','ScienceQA']
+def train(args):
+    if args.benchmark == "executable":
+        inference_tasks = AllDatasetNameExecutable
+    else:
+        inference_tasks = TASK_LIST
     import numpy as np
 
+    logger = logging.getLogger("eval_router")
+    step_results = []  # list of (step, correct, total, acc)
+
     def eval_router(model, infer_dataloader, step):
-        fe_weight = torch.load(f'{router_weights_path}/step{step}_fe_weight.pth', map_location=model.device).to(torch.float16)
-        classifier_weight = torch.load(f'{router_weights_path}/step{step}_router_weight.pth', map_location=model.device).transpose(0, 1).to(torch.float16)
+        model_dtype = next(model.parameters()).dtype
+        fe_weight = torch.load(f'{router_weights_path}/step{step}_fe_weight.pth', map_location=model.device).to(model_dtype)
+        classifier_weight = torch.load(f'{router_weights_path}/step{step}_router_weight.pth', map_location=model.device).transpose(0, 1).to(model_dtype)
         model.cls_head.weight = torch.nn.Parameter(classifier_weight)
         model.fe.weight = torch.nn.Parameter(fe_weight)
         with torch.no_grad():
             count = 0
             correct = 0
-            print(f'-----------------------start evaluation of step {step}-------------------')
+            logger.info("-" * 60)
+            logger.info(f"Step {step} | Tasks: {inference_tasks[:step + 1]}")
+            logger.info("-" * 60)
             for steps, batch in enumerate(infer_dataloader):
                 labels = batch['gts']
+                sources = batch['sources']
                 input_ids = batch['input_ids']
                 input_ids = input_ids.to('cuda')
                 prediction = model(input_ids).to(torch.float32)
 
-                if labels == [prediction.argmax().item()]:
+                pred_id = prediction.argmax().item()
+                if labels == [pred_id]:
                     correct += 1
                 else:
-                    print(f'prediction: {prediction.argmax().item()}, labels: {labels}')
+                    logger.info(
+                        f"  [WRONG] sample={count} "
+                        f"pred={pred_id} ({inference_tasks[pred_id]}) "
+                        f"gt={labels[0]} ({inference_tasks[labels[0]]}) "
+                        f"input={sources[0]!r}"
+                    )
                 
                 count += 1
                 
             acc = correct / count
-            print(f'step{step} has an acc of：{acc}')
+            logger.info(f"Step {step} | correct={correct}/{count} | acc={acc:.4f}")
+            step_results.append((step, correct, count, acc))
 
     # for i in range(0, len(inference_tasks) - 1):
     for i in range(0, len(inference_tasks)):
-        model, tokenizer = load_model_and_tokenizer(i)
+        model, tokenizer = load_model_and_tokenizer(i, args.model_name_or_path)
         tokenizer.pad_token = tokenizer.eos_token
 
         # cur_inference_tasks = inference_tasks[0:i+2]
@@ -201,20 +315,17 @@ def train():
         all_datasets = []
         for inference_task_id in range(len(cur_inference_tasks)):    # evaluation for previous tasks in a single round
             inference_task = inference_tasks[inference_task_id]
-            cur_dataset_path = os.path.join(dataset_path, inference_task)
+
             # Prepare the data
-            train, test, infer_dataset = create_prompt_dataset(
-                -1,
-                cur_dataset_path,
-                dataset_cache_path,
-                42,
-                distributed=False
+            if args.benchmark == "executable":
+                _, _, hf_test = create_executable_dataset(inference_task, 42, -1, -1, -1)
+            else:
+                _, _, hf_test = create_codetask_dataset(inference_task, 42, -1, -1, -1)
+            infer_dataset = PromptDataset(
+                list(hf_test['prompt']),
+                [inference_task_id for _ in hf_test]
             )
 
-            # infer_dataset = test
-            
-            infer_dataset.answer_dataset = [inference_task_id for _ in infer_dataset.answer_dataset]
-            
             all_datasets.append(infer_dataset)
         
         # continue
@@ -227,8 +338,8 @@ def train():
             tokenizer,
             model=model,
             padding="longest",
-            max_prompt_len=512,
-            max_ans_len=256,
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
             inference=True
         )
@@ -237,20 +348,41 @@ def train():
                                         collate_fn=inf_data_collator,
                                         # sampler=infer_sampler,
                                         shuffle=True,
-                                        batch_size=1)
+                                        batch_size=args.batch_size)
 
         # Inference !
-        # print("***** Start evaluation *****")
         eval_router(model, infer_dataloader, i)
+
+    # ---- Final summary ----
+    logger.info("=" * 60)
+    logger.info("ROUTER EVALUATION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"{'Step':<6} {'#Tasks':<8} {'Correct':<10} {'Total':<10} {'Acc':<10}")
+    logger.info("-" * 60)
+    for step, correct, total, acc in step_results:
+        logger.info(f"{step:<6} {step + 1:<8} {correct:<10} {total:<10} {acc:<10.4f}")
+    logger.info("=" * 60)
+    if step_results:
+        avg_acc = sum(r[3] for r in step_results) / len(step_results)
+        logger.info(f"Average accuracy across all steps: {avg_acc:.4f}")
 
 
 if __name__ == "__main__":
+    args = parse_args()
+    router_weights_path = args.router_weights_path
+    dataset_cache_path = args.dataset_cache_path
+    log_file = os.path.join(router_weights_path, "eval.log")
+    os.makedirs(router_weights_path, exist_ok=True)
     logging.basicConfig(
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         level=logging.INFO,
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_file, mode="a", encoding="utf-8"),
+        ],
     )
     print(
         "-----------------------------------start router evaluation---------------------------------------"
     )
-    train()
+    train(args)
