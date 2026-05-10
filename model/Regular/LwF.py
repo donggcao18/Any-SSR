@@ -84,6 +84,7 @@ class LwF(CL_Base_Model):
 
         dataloader_train = self.train_task_list[task]
         dataloader_eval = self.eval_task_list[task]
+        dataloader_test = self.test_task_list[task]
         for epoch in range(epochs):
             print(epoch)
             self.model.train()
@@ -110,13 +111,28 @@ class LwF(CL_Base_Model):
             print_rank_0(
                 f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
                 self.args.global_rank)
-            eval_result = self.task_generation_evaluation(
+            eval_result, eval_predictions = self.task_generation_evaluation(
                 task,
                 dataloader_eval,
                 self.device,
                 max_ans_len=resolve_max_ans_len(i_task),
+                return_predictions=True,
             )
             print_rank_0(f"[task={task}] eval result: {eval_result}", self.args.global_rank)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            dataloader_test,
+            self.device,
+            max_ans_len=resolve_max_ans_len(i_task),
+            return_predictions=True,
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
 
         #### TEST on all seen tasks ####
         trained_task_name = str(task).replace("/", "_").replace(":", "_")
@@ -137,6 +153,7 @@ class LwF(CL_Base_Model):
                 return_predictions=True,
             )
             print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
+            self._save_generation_predictions(f"seen-test-after-task-{i_task}", seen_idx, eval_task, test_result, prediction_rows)
 
             if self.args.global_rank == 0:
                 eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")

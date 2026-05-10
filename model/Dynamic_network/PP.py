@@ -578,15 +578,16 @@ class PP(CL_Base_Model):
             print_rank_0(
                 f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
                 self.args.global_rank)
-            eval_result = self.task_generation_evaluation(
+            eval_result, eval_predictions = self.task_generation_evaluation(
                 task,
                 self.eval_task_list[task],
                 self.device,
                 max_ans_len=self._resolve_max_ans_len(task_num),
-                return_predictions=False,
+                return_predictions=True,
                 prompt=prompt
             )
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", task_num, task, eval_result, eval_predictions)
 
         if progressive:
             self.progress_previous_prompts(task_num=task_num)
@@ -600,6 +601,19 @@ class PP(CL_Base_Model):
                 curr_prompt = self._prompt_container().prompt
             else:
                 curr_prompt = None
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            self.test_task_list[task],
+            self.device,
+            max_ans_len=self._resolve_max_ans_len(task_num),
+            return_predictions=True,
+            prompt=curr_prompt
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", task_num, task, test_result, test_predictions)
         # log_dict = {
         #     "task_id": task_num,
         # }

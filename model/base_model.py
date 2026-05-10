@@ -152,6 +152,17 @@ class CL_Base_Model:
             return int(max_ans_len[task_idx])
         return int(max_ans_len)
 
+    def _save_generation_predictions(self, split_name, task_idx, task, metrics, prediction_rows):
+        if self.args.global_rank != 0 or self.args.output_dir is None:
+            return
+        safe_task_name = str(task).replace("/", "_").replace(":", "_")
+        pred_dir = os.path.join(self.args.output_dir, "predictions", split_name)
+        os.makedirs(pred_dir, exist_ok=True)
+        pred_file = os.path.join(pred_dir, f"{task_idx}_{safe_task_name}.json")
+        with open(pred_file, "w", encoding="utf-8") as f:
+            json.dump({"metrics": metrics, "predictions": prediction_rows}, f, ensure_ascii=False, indent=2)
+        print_rank_0(f"Saved {split_name} predictions to {pred_file}", self.args.global_rank)
+
     def test_all_tasks_and_save_predictions(self):
         if self.args.local_rank == -1:
             device = torch.device("cuda")
@@ -204,6 +215,7 @@ class CL_Base_Model:
         #### TRAIN ####
         train_dataloader = self.train_task_list[task]
         eval_dataloader = self.eval_task_list[task]
+        test_dataloader = self.test_task_list[task]
         total_steps = epochs * len(train_dataloader)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
         global_step = 0
@@ -246,14 +258,20 @@ class CL_Base_Model:
             )
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
 
-            if self.args.global_rank == 0 and self.args.output_dir is not None:
-                safe_task_name = str(task).replace("/", "_").replace(":", "_")
-                pred_dir = os.path.join(self.args.output_dir, "predictions", f"eval-epoch{epoch+1}")
-                os.makedirs(pred_dir, exist_ok=True)
-                pred_file = os.path.join(pred_dir, f"{safe_task_name}.json")
-                with open(pred_file, "w", encoding="utf-8") as f:
-                    json.dump({"metrics": eval_result, "predictions": eval_predictions}, f, ensure_ascii=False, indent=2)
-                print_rank_0(f"Saved eval predictions to {pred_file}", self.args.global_rank)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            test_dataloader,
+            device,
+            max_ans_len=self._resolve_max_ans_len(i_task),
+            return_predictions=True,
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
     
     
     def train_continual(self):

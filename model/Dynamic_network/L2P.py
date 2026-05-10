@@ -280,7 +280,33 @@ class L2P(CL_Base_Model):
 
                 #             print(hp_grad)
                 self.model.step()
-                
+
+            print_rank_0(
+                f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
+                self.args.global_rank)
+            eval_result, eval_predictions = self.task_generation_evaluation(
+                task,
+                self.eval_task_list[task],
+                self.device,
+                max_ans_len=self._resolve_max_ans_len(i_task),
+                return_predictions=True,
+            )
+            print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            self.test_task_list[task],
+            self.device,
+            max_ans_len=self._resolve_max_ans_len(i_task),
+            return_predictions=True,
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
+
                 
     def evaluate(self, round, infer_task_id, task):
         self.evaluate_one_task(round,infer_task_id, task)
