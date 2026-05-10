@@ -1,2 +1,10 @@
 **/__pycache__/
 .env
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+logs/
+.vscode/
+.cache/
+output_models/
