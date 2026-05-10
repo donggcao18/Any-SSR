@@ -43,3 +43,10 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --start_layer 0 \
 
 done
+
+: "${HF_MODEL_REPO_ID:=ankhanhtran02/lora-per-task-executable-start-0}"
+
+python upload_output_to_hf.py \
+  --output-dir "./output_models/lora_per_task_executable_start_0" \
+  --repo-id "$HF_MODEL_REPO_ID" \
+  --commit-message "Upload LoRA per-task executable outputs"
