@@ -4,6 +4,7 @@ import torch.nn as nn
 from tqdm.auto import tqdm
 from deepspeed.utils import safe_get_full_grad
 from model.base_model import CL_Base_Model
+from utils.utils import print_rank_0
 
 
 def count_parameter(model):
@@ -163,6 +164,21 @@ class OGD(CL_Base_Model):
         self.ogd_basis = orthonormalize(self.ogd_basis, normalize=True)
         del new_basis_tensor
         del self.new_basis
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result = self.task_generation_evaluation(
+            task,
+            self.test_task_list[task],
+            device,
+            max_ans_len=self._resolve_max_ans_len(i_task),
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
 
     
     def train_continual(self):

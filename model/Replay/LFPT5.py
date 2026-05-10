@@ -155,6 +155,17 @@ class LFPT5(CL_Base_Model):
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
                 self.model.step()
 
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result = self.task_generation_evaluation(
+            task,
+            self.test_task_list[task],
+            self.device,
+            max_ans_len=self._resolve_max_ans_len(i_task),
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+
         #### SAVE ####
         if self.args.output_dir is not None:
             print_rank_0('saving the final model ...', self.args.global_rank)

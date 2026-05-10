@@ -174,12 +174,18 @@ class L2P(CL_Base_Model):
                 self.model.backward(loss, retain_graph=True)
                 self.model.step()
 
-            # Validate (match O_LoRA style)
+            # Validate on eval split after each epoch.
             print_rank_0(
                 f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
                 self.args.global_rank,
             )
             self.evaluate_one_task(round=i_task, infer_task_id=i_task, task=task, infer_dataloader=self.eval_task_list[task])
+
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank,
+        )
+        self.evaluate_one_task(round=i_task, infer_task_id=i_task, task=task, infer_dataloader=self.test_task_list[task])
 
     def test_all_tasks_and_save_predictions(self):
         self.args.output_dir = './L2P_final_results'

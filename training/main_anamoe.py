@@ -269,9 +269,6 @@ def parse_args():
                         type=int,
                         default=100,
                         help='Log training loss every N steps.')
-    parser.add_argument('--disable_epoch_eval',
-                        action='store_true',
-                        help='Disable per-epoch evaluation during training.')
     # LoRA related arguments
     parser.add_argument('--lora_dim',
                         type=int,
