@@ -5,7 +5,17 @@
 import re
 from rouge import Rouge
 from fuzzywuzzy import fuzz
-from datasets import load_metric
+
+# `datasets.load_metric` was removed in newer versions of `datasets`.
+# Use `evaluate.load` instead, with a backward-compatible fallback.
+try:
+    import evaluate  # type: ignore
+
+    def load_metric(name: str):
+        return evaluate.load(name)
+except Exception:  # pragma: no cover
+    from datasets import load_metric  # type: ignore
+
 from nltk.translate.bleu_score import sentence_bleu
 
 

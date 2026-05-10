@@ -36,3 +36,12 @@ AllDatasetName = ["CONCODE",
                   "TheVault_Csharp",
                   "CoST"]
 
+AllDatasetNameExecutable = ['python',
+                            'cpp',
+                            'swift',
+                            'rust',
+                            'csharp',
+                            'java',
+                            'php',
+                            'typescript',
+                            'shell']

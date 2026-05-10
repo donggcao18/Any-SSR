@@ -5,6 +5,7 @@ Part of the code was adopted from https://github.com/microsoft/Megatron-DeepSpee
 """
 
 import os
+import sys
 from typing import List, Literal, Optional, TypedDict
 import torch
 from torch.utils.data import Dataset, Subset, ConcatDataset
@@ -12,8 +13,13 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import hashlib
-from . import raw_datasets
-from datasets import load_dataset
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
+
+from utils.data import raw_datasets
+from datasets import load_dataset, concatenate_datasets
+import json
 
 Role = Literal["system", "user", "assistant"]
 
@@ -301,6 +307,62 @@ def create_codetask_dataset(dataset_name, seed, num_train, num_eval, num_test):
 
     return data_dict['train'], data_dict['validation'], data_dict['test']
 
+def _hf_token() -> str | None:
+    return os.environ.get("HF_TOKEN")
+
+def _load_split(repo_id: str, split: str) -> Dataset:
+    return load_dataset(repo_id, split=split, token=_hf_token())
+
+
+def _limit_dataset(dataset: Dataset, max_samples: int=-1, seed: int=0) -> Dataset:
+    if max_samples == -1 or len(dataset) <= max_samples:
+        return dataset
+    return dataset.shuffle(seed=seed).select(range(max_samples))
+
+
+def _load_training_dataset(language, max_train_samples, seed=0) -> Dataset:
+    split_datasets = []
+    for split in ["train_OSS_Instruct", "train_McEval_Instruct"]:
+        dataset = _load_split("ankhanhtran02/CL4Code-executable-datasets", split)
+        dataset = dataset.filter(
+            lambda row: row["language"] == language and row["solution"] is not None
+        )
+        split_datasets.append(dataset)
+
+    if not split_datasets:
+        raise ValueError("No training splits were loaded.")
+
+    train_dataset = split_datasets[0] if len(split_datasets) == 1 else concatenate_datasets(split_datasets)
+    train_dataset = _limit_dataset(train_dataset, max_train_samples, seed)
+    dataset = train_dataset.remove_columns([c for c in train_dataset.column_names if c not in ('instruction', 'solution')])
+    dataset = dataset.rename_column('instruction', 'prompt')
+    dataset = dataset.rename_column('solution', 'answer')
+    if len(dataset) > 0:
+        print("[train] Sample:")
+        print(json.dumps(dataset[0], ensure_ascii=False, indent=2))
+    return dataset
+
+def _load_eval_dataset(language, max_eval_samples, seed=0) -> Dataset:
+    dataset = _load_split("ankhanhtran02/CL4Code-executable-datasets", "test_McEval")
+    dataset = dataset.filter(
+        lambda row: row["language"] == language and row["test"] is not None
+    )
+    dataset = _limit_dataset(dataset, max_eval_samples, seed)
+    dataset = dataset.remove_columns([c for c in dataset.column_names if c not in ('instruction', 'solution')])
+    dataset = dataset.rename_column('instruction', 'prompt')
+    dataset = dataset.rename_column('solution', 'answer')
+    if len(dataset) == 0:
+        raise ValueError(f"No evaluation samples found in split=test_McEval for language={language}.")
+    if len(dataset) > 0:
+        print("[eval] Sample:")
+        print(json.dumps(dataset[0], ensure_ascii=False, indent=2))
+    return dataset
+
+
+def create_executable_dataset(dataset_name, seed, num_train, num_eval, num_test):
+    train_dataset = _load_training_dataset(dataset_name, num_train, seed)
+    test_dataset = _load_eval_dataset(dataset_name, num_test, seed)
+    return train_dataset, test_dataset, test_dataset
 
 # step 1
 def create_prompt_dataset(local_rank,
@@ -348,3 +410,7 @@ def create_prompt_dataset(local_rank,
     if distributed:
         torch.distributed.barrier()
     return torch.load(train_fname), torch.load(eval_fname), torch.load(test_fname)
+
+if __name__ == "__main__":
+    train_ds, eval_ds, test_ds = create_executable_dataset("swift", 0, -1, -1, -1)
+    print(f"train size: {len(train_ds)}, eval size: {len(eval_ds)}, test size: {len(test_ds)}")
