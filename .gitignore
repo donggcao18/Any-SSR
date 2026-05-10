@@ -3,3 +3,11 @@
 *.zip
 output_models/
 .cache/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+logs/
+.vscode/
+.cache/
+output_models/

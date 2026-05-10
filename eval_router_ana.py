@@ -1,4 +1,5 @@
 import os
+import argparse
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 from transformers.models.qwen2 import Qwen2ForCausalLM, Qwen2Model
@@ -31,17 +32,64 @@ from tqdm import tqdm
 
 from peft import get_peft_model
 
-from utils.data.data_utils import create_codetask_dataset, PromptDataset
+from utils.data.data_utils import create_codetask_dataset, create_executable_dataset, PromptDataset
 from utils.data.data_collator import DataCollator
 from utils.data.hf_task_specs import TASK_LIST
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from training.params import AllDatasetNameExecutable
 
 import torch.nn.functional as F
 
 feature_layers = 4
 gamma = 5000
-router_weights_path = f'./output_models/router_weights_qwen_gamma5000'
-dataset_cache_path = f'./output_models/router_weights_qwen_gamma5000'
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate router for continual learning.")
+    parser.add_argument(
+        "--model_name_or_path",
+        type=str,
+        default="Qwen/Qwen2.5-Coder-1.5B",
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--router_weights_path",
+        type=str,
+        default="./output_models/router_weights_qwen_gamma5000",
+        help="Path to router weights.",
+    )
+    parser.add_argument(
+        "--dataset_cache_path",
+        type=str,
+        default="./output_models/router_weights_qwen_gamma5000",
+        help="Path to dataset cache.",
+    )
+    parser.add_argument(
+        "--max_prompt_len",
+        type=int,
+        default=512,
+        help="Maximum prompt length.",
+    )
+    parser.add_argument(
+        "--max_ans_len",
+        type=int,
+        default=256,
+        help="Maximum answer length.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Batch size for router evaluation.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        choices=["executable", "non-executable"],
+        default="non-executable",
+        help="Benchmark to be evaluated: executable or non-executable.",
+    )
+    return parser.parse_args()
 
 class NewQwen2ForCausalLM(Qwen2ForCausalLM):
     _tied_weights_keys = ["lm_head.weight"]
@@ -182,7 +230,7 @@ class NewLlamaForCausalLM(LlamaForCausalLM):
     def MoeClassifier():
         pass
 
-def load_model_and_tokenizer(step, model_name_or_path='Qwen/Qwen2.5-1.5B'):
+def load_model_and_tokenizer(step, model_name_or_path):
     if 'qwen' in model_name_or_path.lower():
         ModelClass = NewQwen2ForCausalLM
     else:
@@ -204,15 +252,18 @@ def load_model_and_tokenizer(step, model_name_or_path='Qwen/Qwen2.5-1.5B'):
 
     return model, tokenizer
 
-def load_tokenizer(model_name_or_path='Qwen/Qwen2.5-Coder-1.5B'):
+def load_tokenizer(model_name_or_path):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name_or_path, trust_remote_code=True
     )
 
     return tokenizer
 
-def train():
-    inference_tasks = TASK_LIST
+def train(args):
+    if args.benchmark == "executable":
+        inference_tasks = AllDatasetNameExecutable
+    else:
+        inference_tasks = TASK_LIST
     import numpy as np
 
     logger = logging.getLogger("eval_router")
@@ -256,7 +307,7 @@ def train():
 
     # for i in range(0, len(inference_tasks) - 1):
     for i in range(0, len(inference_tasks)):
-        model, tokenizer = load_model_and_tokenizer(i)
+        model, tokenizer = load_model_and_tokenizer(i, args.model_name_or_path)
         tokenizer.pad_token = tokenizer.eos_token
 
         # cur_inference_tasks = inference_tasks[0:i+2]
@@ -266,7 +317,10 @@ def train():
             inference_task = inference_tasks[inference_task_id]
 
             # Prepare the data
-            _, _, hf_test = create_codetask_dataset(inference_task, 42, -1, -1, -1)
+            if args.benchmark == "executable":
+                _, _, hf_test = create_executable_dataset(inference_task, 42, -1, -1, -1)
+            else:
+                _, _, hf_test = create_codetask_dataset(inference_task, 42, -1, -1, -1)
             infer_dataset = PromptDataset(
                 list(hf_test['prompt']),
                 [inference_task_id for _ in hf_test]
@@ -284,8 +338,8 @@ def train():
             tokenizer,
             model=model,
             padding="longest",
-            max_prompt_len=512,
-            max_ans_len=256,
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
             inference=True
         )
@@ -294,7 +348,7 @@ def train():
                                         collate_fn=inf_data_collator,
                                         # sampler=infer_sampler,
                                         shuffle=True,
-                                        batch_size=1)
+                                        batch_size=args.batch_size)
 
         # Inference !
         eval_router(model, infer_dataloader, i)
@@ -314,6 +368,9 @@ def train():
 
 
 if __name__ == "__main__":
+    args = parse_args()
+    router_weights_path = args.router_weights_path
+    dataset_cache_path = args.dataset_cache_path
     log_file = os.path.join(router_weights_path, "eval.log")
     os.makedirs(router_weights_path, exist_ok=True)
     logging.basicConfig(
@@ -328,4 +385,4 @@ if __name__ == "__main__":
     print(
         "-----------------------------------start router evaluation---------------------------------------"
     )
-    train()
+    train(args)

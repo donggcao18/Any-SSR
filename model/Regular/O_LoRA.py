@@ -47,6 +47,7 @@ class O_LoRA(CL_Base_Model):
         num_task = len(self.train_task_list)
         train_dataloader = self.train_task_list[task]
         eval_dataloader = self.eval_task_list[task]
+        test_dataloader = self.test_task_list[task]
 
         #### TRAIN ####
         total_steps = epochs * len(train_dataloader)
@@ -95,17 +96,32 @@ class O_LoRA(CL_Base_Model):
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
                 self.model.step()
 
-            # Validate on eval split after each epoch
+            # Validate on eval split after each epoch.
             print_rank_0(
                 f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
                 self.args.global_rank)
-            eval_result = self.task_generation_evaluation(
+            eval_result, eval_predictions = self.task_generation_evaluation(
                 task,
                 eval_dataloader,
                 self.device,
                 max_ans_len=int(self.args.max_ans_len[i_task]),
+                return_predictions=True,
             )
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            test_dataloader,
+            self.device,
+            max_ans_len=int(self.args.max_ans_len[i_task]),
+            return_predictions=True,
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
 
         #### COMBINE lora with lora_new and INITIALIZE lora_new ####
         flag = 0

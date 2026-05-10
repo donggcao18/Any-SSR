@@ -165,5 +165,23 @@ class GEM(CL_Base_Model):
                 self.model.step()
 
 
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+        print_rank_0(
+            f"***** Testing on current task {task} after all epochs *****",
+            self.args.global_rank)
+        test_result, test_predictions = self.task_generation_evaluation(
+            task,
+            self.test_task_list[task],
+            device,
+            max_ans_len=self._resolve_max_ans_len(i_task),
+            return_predictions=True,
+        )
+        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
+
 
             
