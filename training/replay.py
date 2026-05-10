@@ -39,7 +39,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model
+from utils.model.model_utils import create_hf_model, is_encoder_decoder_model
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -240,16 +240,14 @@ def main():
     torch.distributed.barrier()
 
     tokenizer = load_hf_tokenizer(args.model_name_or_path, fast_tokenizer=True)
-    # default the LLM is decoder only model, so padding side is left
-    assert tokenizer.padding_side == 'left'
-    assert tokenizer.truncation_side == "left"
 
-    model = create_hf_model(AutoModelForCausalLM,
+    model = create_hf_model(None,
                             args.model_name_or_path,
                             tokenizer,
                             ds_config=ds_config,
                             disable_dropout=args.disable_dropout
                             )
+    args.is_encoder_decoder = is_encoder_decoder_model(model)
     
     
     train_task_list = {}
@@ -302,7 +300,8 @@ def main():
             max_prompt_len=args.max_prompt_len,
             max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=False
+            inference=False,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
         inf_data_collator = DataCollator(
             tokenizer,
@@ -311,7 +310,8 @@ def main():
             max_prompt_len=args.max_prompt_len,
             max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=True
+            inference=True,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
                 
 
@@ -372,7 +372,8 @@ def main():
             max_prompt_len=args.max_prompt_len,
             max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=False
+            inference=False,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
         inf_data_collator = DataCollator(
             tokenizer,
@@ -381,7 +382,8 @@ def main():
             max_prompt_len=args.max_prompt_len,
             max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=True
+            inference=True,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
                 
 
@@ -496,7 +498,8 @@ def main():
             max_prompt_len=args.max_prompt_len,
             max_ans_len=args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=False
+            inference=False,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
         replay_dataloader = DataLoader(replay_datasets,
                                     collate_fn=data_collator,

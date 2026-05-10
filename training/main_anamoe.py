@@ -77,7 +77,13 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model
+from utils.model.model_utils import (
+    create_hf_model,
+    get_input_embeddings,
+    get_lora_target_modules,
+    get_peft_task_type,
+    is_encoder_decoder_model,
+)
 
 # add flash attention
 try:
@@ -398,16 +404,14 @@ def main():
     torch.distributed.barrier()
 
     tokenizer = load_hf_tokenizer(args.model_name_or_path, fast_tokenizer=True)
-    # default the LLM is decoder only model, so padding side is left
-    assert tokenizer.padding_side == 'left'
-    assert tokenizer.truncation_side == "left"
 
-    model = create_hf_model(AutoModelForCausalLM,
+    model = create_hf_model(None,
                             args.model_name_or_path,
                             tokenizer,
                             ds_config=ds_config,
                             disable_dropout=args.disable_dropout
                             )
+    args.is_encoder_decoder = is_encoder_decoder_model(model)
     
     # some CL methods can be realized by peft
     if args.CL_method == "LFPT5":
@@ -415,7 +419,7 @@ def main():
 
         initial_prompt = getInitialPrompt(tokenizer, prompt_token_number=300)
         peft_config = PromptTuningConfig(
-            task_type=TaskType.CAUSAL_LM,
+            task_type=get_peft_task_type(TaskType, args.is_encoder_decoder),
             prompt_tuning_init=PromptTuningInit.TEXT,
             num_virtual_tokens=300,
             prompt_tuning_init_text=initial_prompt,
@@ -426,9 +430,16 @@ def main():
     if args.CL_method == "O-LoRA":
         from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
 
+        lora_target_modules = get_lora_target_modules(args.model_name_or_path, args.is_encoder_decoder)
+        lora_kwargs = {}
+        if lora_target_modules is not None:
+            lora_kwargs["target_modules"] = lora_target_modules
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
-            target_modules=["q_proj", "v_proj"]
+            task_type=get_peft_task_type(TaskType, args.is_encoder_decoder),
+            r=args.lora_dim,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            **lora_kwargs,
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
@@ -439,9 +450,17 @@ def main():
                 
     if args.CL_method == "OGD":
         from peft import get_peft_model, LoraConfig, TaskType
-        
+
+        lora_target_modules = get_lora_target_modules(args.model_name_or_path, args.is_encoder_decoder)
+        lora_kwargs = {}
+        if lora_target_modules is not None:
+            lora_kwargs["target_modules"] = lora_target_modules
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
+            task_type=get_peft_task_type(TaskType, args.is_encoder_decoder),
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            **lora_kwargs,
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
@@ -450,9 +469,17 @@ def main():
 
     if args.CL_method == "lora":
         from peft import get_peft_model, LoraConfig, TaskType
-        
+
+        lora_target_modules = get_lora_target_modules(args.model_name_or_path, args.is_encoder_decoder)
+        lora_kwargs = {}
+        if lora_target_modules is not None:
+            lora_kwargs["target_modules"] = lora_target_modules
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+            task_type=get_peft_task_type(TaskType, args.is_encoder_decoder),
+            r=args.lora_dim,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            **lora_kwargs,
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
@@ -461,9 +488,17 @@ def main():
 
     if args.CL_method == "anamoe":
         from peft import get_peft_model, LoraConfig, TaskType
-        
+
+        lora_target_modules = get_lora_target_modules(args.model_name_or_path, args.is_encoder_decoder)
+        lora_kwargs = {}
+        if lora_target_modules is not None:
+            lora_kwargs["target_modules"] = lora_target_modules
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+            task_type=get_peft_task_type(TaskType, args.is_encoder_decoder),
+            r=args.lora_dim,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            **lora_kwargs,
         )
 
         names = [name for name, param in model.named_parameters()]
@@ -472,17 +507,19 @@ def main():
         end = 28  # Qwen2.5-Coder-1.5B has 28 layers (0-27)
         # filtered_names = [name for name in names if start <= int(name.split('.')[2]) < end]
 
-        filtered_names = [
-            name[:-7] for name in names
-            if name.startswith("model.layers.")  # 确保是层相关的内容
-            and start <= int(name.split('.')[2]) < end  # 检查层号是否在范围内
-        ]
+        if not args.is_encoder_decoder:
+            filtered_names = [
+                name[:-7] for name in names
+                if name.startswith("model.layers.")  # 确保是层相关的内容
+                and start <= int(name.split('.')[2]) < end  # 检查层号是否在范围内
+            ]
 
-        filtered_names = [name for name in filtered_names if 'layernorm' not in name]
-        filtered_names = [name for name in filtered_names if 'k_proj' not in name]
-        filtered_names = [name for name in filtered_names if 'o_proj' not in name]
-        filtered_names = [name for name in filtered_names if 'mlp' not in name]
-        peft_config.target_modules = filtered_names
+            filtered_names = [name for name in filtered_names if 'layernorm' not in name]
+            filtered_names = [name for name in filtered_names if 'k_proj' not in name]
+            filtered_names = [name for name in filtered_names if 'o_proj' not in name]
+            filtered_names = [name for name in filtered_names if 'mlp' not in name]
+            if filtered_names:
+                peft_config.target_modules = filtered_names
 
         model = get_peft_model(model, peft_config)
         # for name, param in model.named_parameters():
@@ -539,7 +576,8 @@ def main():
             max_prompt_len=int(args.max_prompt_len[i]),
             max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
-            inference=False
+            inference=False,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
         inf_data_collator = DataCollator(
             tokenizer,
@@ -548,7 +586,8 @@ def main():
             max_prompt_len=int(args.max_prompt_len[i]),
             max_ans_len=int(args.max_ans_len[i]),
             pad_to_multiple_of=8,
-            inference=True
+            inference=True,
+            is_encoder_decoder=args.is_encoder_decoder,
         )
                 
 
@@ -614,18 +653,7 @@ def main():
         return optimizer, lr_scheduler
     
     if args.CL_method=="PP" or args.CL_method=="L2P":
-        embed_tokens = None
-        if hasattr(model, "model") and hasattr(model.model, "embed_tokens"):
-            # llama/qwen and many decoder-only HF models
-            embed_tokens = model.model.embed_tokens
-        elif hasattr(model, "model") and hasattr(model.model, "decoder") and hasattr(model.model.decoder, "embed_tokens"):
-            # opt-like models
-            embed_tokens = model.model.decoder.embed_tokens
-
-        if embed_tokens is None:
-            raise ValueError(
-                f"Unsupported model architecture for {args.CL_method}: cannot locate embed_tokens on {type(model)}"
-            )
+        embed_tokens = get_input_embeddings(model)
 
         embed_tokens_shape = embed_tokens.weight.shape
         args.embed_tokens_dim = embed_tokens_shape[1]
@@ -638,11 +666,8 @@ def main():
             model = convert_PP_model(model, args)
             # Restrict trainable parameters for PP before DeepSpeed/optimizer init.
             # This avoids ZeRO-2 reduction over large frozen backbone params.
-            for _, params in model.named_parameters():
-                params.requires_grad = False
-            model.model.prompt.requires_grad = True
-            for params in model.model.mlps.parameters():
-                params.requires_grad = True
+            for name, params in model.named_parameters():
+                params.requires_grad = ("prompt" in name or "mlps" in name)
             
         elif args.CL_method=="L2P":
             args.pool_size = 10
