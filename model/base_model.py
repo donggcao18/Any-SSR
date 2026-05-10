@@ -13,6 +13,7 @@ import time
 from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
 from evaluator.compute_metrics import compute_metrics, DATASET_TO_OUTPUT_LANG
 from transformers import GenerationConfig
+from utils.model.model_utils import decode_generated_sequences, is_encoder_decoder_model
 
 class CL_Base_Model:
     def __init__(self,
@@ -30,6 +31,9 @@ class CL_Base_Model:
         self.eval_task_list = eval_task_list
         self.test_task_list = test_task_list
         self.args = args
+        self.is_encoder_decoder = bool(
+            getattr(args, "is_encoder_decoder", False) or is_encoder_decoder_model(model)
+        )
         self.generation_config = GenerationConfig(
             do_sample=self.args.do_sample,
             temperature=self.args.temperature if self.args.do_sample else None,
@@ -112,10 +116,11 @@ class CL_Base_Model:
                     use_cache=True,
                 )
 
-            sequences = self.tokenizer.batch_decode(
-                generate_ids[:, prompt_len:],
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
+            sequences = decode_generated_sequences(
+                self.tokenizer,
+                generate_ids,
+                prompt_len=prompt_len,
+                is_encoder_decoder=self.is_encoder_decoder,
             )
             predicted_sequences += sequences
 

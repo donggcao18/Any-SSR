@@ -45,11 +45,20 @@ class DataCollator:
     inference: bool = False
     demonstrations: Optional[Any] = None
     task: str = None
+    is_encoder_decoder: bool = False
+
+    def __post_init__(self):
+        if self.is_encoder_decoder:
+            self.tokenizer.padding_side = "right"
+            self.tokenizer.truncation_side = "right"
 
     def __call__(self, batch, return_tensors=None):
         if return_tensors is None:
             return_tensors = self.return_tensors
-        model_inputs = self.decoder_call(batch, self.return_tensors)
+        if self.is_encoder_decoder:
+            model_inputs = self.seq2seq_call(batch, return_tensors)
+        else:
+            model_inputs = self.decoder_call(batch, return_tensors)
 
         return model_inputs
 
@@ -69,6 +78,7 @@ class DataCollator:
         if (
                 len(result["input_ids"]) < cutoff_len
                 and add_eos_token
+                and self.tokenizer.eos_token_id is not None
         ):
             result["input_ids"].append(self.tokenizer.eos_token_id)
             result["attention_mask"].append(1)
@@ -76,6 +86,7 @@ class DataCollator:
         if (
                 len(result["input_ids"]) < cutoff_len
                 and add_bos_token
+                and self.tokenizer.bos_token_id is not None
         ):
             result["input_ids"] = [self.tokenizer.bos_token_id] + result["input_ids"]
             result["attention_mask"] = [1] + result["attention_mask"]
@@ -208,6 +219,111 @@ class DataCollator:
     #     return model_inputs
 
 
+    def _instruction_with_demonstrations(self, instruction):
+        if self.demonstrations is None:
+            return instruction
+
+        # HF tasks: dataset has already produced instruction prompt via instruction pool.
+        # We only prepend demonstrations + constrained header; do NOT use legacy TASK_PROMT.
+        if _is_hf_task(self.task):
+            task_prompt = CONSTRAINED_PROMPT
+            for demonstration in self.demonstrations:
+                task_prompt += demonstration["prompt"]
+                task_prompt += demonstration["answer"] + "\n\n"
+            return task_prompt + instruction
+
+        # Legacy TRACE tasks
+        task_prefix = LEGACY_TASK_PROMPT.get(self.task, "")
+        task_prompt = task_prefix
+        if self.task != "MeetingBank":
+            task_prompt += CONSTRAINED_PROMPT
+        for demonstration in self.demonstrations:
+            if self.task == "Py150":
+                task_prompt += "Code:\n"
+            task_prompt += demonstration["prompt"]
+            task_prompt += demonstration["answer"] + "\n\n"
+
+        if self.task == "Py150":
+            task_prompt += "Code:\n"
+        if self.task != "Py150":
+            instruction = _strip_legacy_task_prefix(self.task, instruction)
+        return task_prompt + instruction
+
+    def _format_source(self, instruction, include_decoder_output_prefix=False):
+        if include_decoder_output_prefix:
+            return f"input: {instruction}\noutput: "
+        return f"input: {instruction}"
+
+    def seq2seq_call(self, batch, return_tensors):
+        sources = []
+        gts = []
+        source_features = []
+        labels = []
+
+        pad_id = self.tokenizer.pad_token_id
+        if pad_id is None:
+            raise ValueError("Seq2seq collation requires tokenizer.pad_token_id to be set.")
+
+        for instance in batch:
+            instruction = instance["prompt"]
+            label = instance["answer"]
+            sources.append(instruction)
+            gts.append(label)
+
+            if self.inference:
+                instruction = self._instruction_with_demonstrations(instruction)
+
+            formatted_prompt = self._format_source(instruction, include_decoder_output_prefix=False)
+            source_features.append(
+                self.tokenizer(
+                    formatted_prompt,
+                    truncation=True,
+                    max_length=self.max_prompt_len,
+                    add_special_tokens=True,
+                    padding=False,
+                    return_tensors=None,
+                )
+            )
+
+            if not self.inference:
+                tokenized_label = self.tokenizer(
+                    label,
+                    truncation=True,
+                    max_length=self.max_ans_len,
+                    add_special_tokens=True,
+                    padding=False,
+                    return_tensors=None,
+                )
+                labels.append(tokenized_label["input_ids"])
+
+        model_inputs = self.tokenizer.pad(
+            source_features,
+            padding=self.padding,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors=return_tensors,
+        )
+
+        if not self.inference:
+            max_label_len = max(len(label_ids) for label_ids in labels) if labels else 0
+            if self.pad_to_multiple_of is not None and max_label_len > 0:
+                max_label_len = (
+                    (max_label_len + self.pad_to_multiple_of - 1)
+                    // self.pad_to_multiple_of
+                    * self.pad_to_multiple_of
+                )
+            padded_labels = [
+                label_ids + [self.label_pad_token_id] * (max_label_len - len(label_ids))
+                for label_ids in labels
+            ]
+            model_inputs["labels"] = torch.tensor(padded_labels, dtype=torch.long)
+
+        model_inputs["sources"] = sources
+        if self.inference:
+            model_inputs["gts"] = gts
+
+        return model_inputs
+
+
     def decoder_call(self, batch, return_tensors):
         sources = []
         gts = []
@@ -225,7 +341,7 @@ class DataCollator:
 
             if not self.inference:
                 # Wrap instruction in input/output template to steer generation format.
-                formatted_prompt = f"input: {instruction}\noutput: "
+                formatted_prompt = self._format_source(instruction, include_decoder_output_prefix=True)
 
                 # Tokenize prompt and label separately — no BOS (Qwen has none),
                 # EOS appended only at the end of the target.
@@ -243,35 +359,10 @@ class DataCollator:
                 }
                 tokenized_sources.append(combined)
             else:
-                if self.demonstrations is not None:
-                    # HF tasks: dataset has already produced instruction prompt via instruction pool.
-                    # We only prepend demonstrations + constrained header; do NOT use legacy TASK_PROMT.
-                    if _is_hf_task(self.task):
-                        task_prompt = CONSTRAINED_PROMPT
-                        for demonstration in self.demonstrations:
-                            task_prompt += demonstration["prompt"]
-                            task_prompt += demonstration["answer"] + "\n\n"
-                        instruction = task_prompt + instruction
-                    else:
-                        # Legacy TRACE tasks
-                        task_prefix = LEGACY_TASK_PROMPT.get(self.task, "")
-                        task_prompt = task_prefix
-                        if self.task != "MeetingBank":
-                            task_prompt += CONSTRAINED_PROMPT
-                        for demonstration in self.demonstrations:
-                            if self.task == "Py150":
-                                task_prompt += "Code:\n"
-                            task_prompt += demonstration["prompt"]
-                            task_prompt += demonstration["answer"] + "\n\n"
-
-                        if self.task == "Py150":
-                            task_prompt += "Code:\n"
-                        if self.task != "Py150":
-                            instruction = _strip_legacy_task_prefix(self.task, instruction)
-                        instruction = task_prompt + instruction
+                instruction = self._instruction_with_demonstrations(instruction)
 
                 # Build formatted_prompt after demonstrations have been prepended to instruction.
-                formatted_prompt = f"input: {instruction}\noutput: "
+                formatted_prompt = self._format_source(instruction, include_decoder_output_prefix=True)
 
                 # No BOS for inference either; left-pad with pad_token_id below.
                 tokenize_source = self.tokenize(formatted_prompt, limit_len, add_bos_token=False, add_eos_token=False)

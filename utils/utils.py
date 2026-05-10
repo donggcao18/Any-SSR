@@ -7,9 +7,11 @@ import torch
 import random
 import numpy as np
 from transformers import set_seed, AutoTokenizer
+from transformers import AutoConfig
 import json
 import deepspeed
 from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
+from utils.model.model_utils import is_encoder_decoder_config
 
 
 def print_rank_0(msg, rank=0):
@@ -42,31 +44,46 @@ class MovingAverage:
         return self.mean
 
 
-def load_hf_tokenizer(model_name_or_path, fast_tokenizer=True):
-    if "llama" in model_name_or_path:
+def load_hf_tokenizer(model_name_or_path, fast_tokenizer=True, is_encoder_decoder=None):
+    if is_encoder_decoder is None:
+        try:
+            model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+            is_encoder_decoder = is_encoder_decoder_config(model_config)
+        except Exception:
+            is_encoder_decoder = False
+
+    if "llama" in model_name_or_path.lower() and not is_encoder_decoder:
         from transformers.models.llama import LlamaTokenizer
         tokenizer = LlamaTokenizer.from_pretrained(
-            model_name_or_path, fast_tokenizer=fast_tokenizer)
+            model_name_or_path, use_fast=fast_tokenizer)
         if tokenizer.pad_token is None:
             pad_token = tokenizer.unk_token if tokenizer.unk_token is not None else tokenizer.eos_token
             if pad_token is not None:
                 tokenizer.add_special_tokens({'pad_token': pad_token})
     else:
         tokenizer = AutoTokenizer.from_pretrained(
-            model_name_or_path, fast_tokenizer=fast_tokenizer, trust_remote_code=True)
+            model_name_or_path, use_fast=fast_tokenizer, trust_remote_code=True)
         if tokenizer.pad_token is None:
             if tokenizer.eos_token is not None:
                 tokenizer.pad_token = tokenizer.eos_token
             elif tokenizer.unk_token is not None:
                 tokenizer.pad_token = tokenizer.unk_token
-        # for falcon
-        if tokenizer.bos_token is None:
+        # for falcon and other decoder-only models
+        if not is_encoder_decoder and tokenizer.bos_token is None:
             tokenizer.bos_token = tokenizer.eos_token
 
-    # decoder-only models should use left padding for generation correctness
-    tokenizer.padding_side = 'left'
+    if tokenizer.pad_token is None:
+        raise ValueError(f"Tokenizer for {model_name_or_path} does not define a pad token.")
 
-    tokenizer.truncation_side = "left"
+    if is_encoder_decoder:
+        tokenizer.padding_side = "right"
+        tokenizer.truncation_side = "right"
+    else:
+        # decoder-only models should use left padding for generation correctness
+        tokenizer.padding_side = "left"
+        tokenizer.truncation_side = "left"
+
+    tokenizer.is_encoder_decoder = is_encoder_decoder
 
     return tokenizer
 
