@@ -25,13 +25,9 @@ pip uninstall torch
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE pip install flash-attn==2.7.2.post1 --no-build-isolation
 
+export HF_TOKEN=your_hf_token
 ```
 
-Create `.env` file in the root directory. Fill in your Wandb API key:
-```
-bash
-WANDB_API_KEY=your_api_key
-```
 
 ## Quick Start
 

@@ -9,8 +9,9 @@ port=$(shuf -i25000-30000 -n1)
 
 # Executable benchmark tasks: python, cpp, swift, rust, csharp, java, php, typescript, shell
 # Using max_prompt_len=1024 and max_new_tokens=2048 for all tasks.
+# for dataset in python cpp swift rust csharp java php typescript shell; do
 
-for dataset in python cpp swift rust csharp java php typescript shell; do
+for dataset in swift rust; do
   deepspeed --master_port "$port" training/main_anamoe.py \
     --model_name_or_path Qwen/Qwen2.5-Coder-1.5B \
     --benchmark executable \
@@ -22,7 +23,7 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --max_prompt_len 1024 \
     --max_ans_len 2048 \
     --learning_rate 1e-4 \
-    --num_train_epochs 3 \
+    --num_train_epochs 2 \
     --lr_scheduler_type cosine \
     --num_warmup_steps 0 \
     --seed 1234 \
@@ -37,8 +38,8 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --run_name "anamoe_${dataset}" \
     --group_name "anamoe_executable_all" \
     --num_train 100 \
-    --num_eval 50 \
-    --num_test 50 \
+    --num_eval 10 \
+    --num_test 10 \
     --logging_steps 10 \
     --start_layer 0 \
 
