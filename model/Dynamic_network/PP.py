@@ -10,6 +10,27 @@ from transformers import AdamW
 from model.base_model import CL_Base_Model
 from utils.utils import print_rank_0, to_device
 
+
+def _base_module(model):
+    return model.module if hasattr(model, "module") else model
+
+
+def get_prompt_container(model):
+    base = _base_module(model)
+    candidates = [
+        model,
+        base,
+        getattr(model, "model", None),
+        getattr(base, "model", None),
+    ]
+    for candidate in candidates:
+        if candidate is not None and hasattr(candidate, "prompt"):
+            return candidate
+    if hasattr(base, "model"):
+        return base.model
+    return base
+
+
 class ResMLP(torch.nn.Module):
     def __init__(self, 
                  bottleneck_size,
@@ -155,11 +176,66 @@ class PP(CL_Base_Model):
         # Creating a trainable soft prompt
         if prefix_len>0:
             if prefix_path==None:
-                self.previous_prompts = torch.zeros([0, self.model.model.prompt.shape[1]],
-                                                    requires_grad=False, dtype=torch.bfloat16).to(self.device)
+                prompt = self._prompt_container().prompt
+                self.previous_prompts = torch.zeros(
+                    [0, prompt.shape[1]],
+                    requires_grad=False,
+                    dtype=prompt.dtype,
+                    device=self.device,
+                )
             else: # initializing previous prompts from the path
                 print('Using pre-trained progressive prompt - ' + prefix_path)
-                self.previous_prompts = torch.tensor(np.load(prefix_path), requires_grad = False).to(self.device)
+                self.previous_prompts = torch.tensor(
+                    np.load(prefix_path),
+                    requires_grad=False,
+                    dtype=self.embed_tokens.weight.dtype,
+                    device=self.device,
+                )
+
+    def _prompt_container(self):
+        return get_prompt_container(self.model)
+
+    def _prepend_prompt(self, inputs_embeds, attention_mask, prompt):
+        batch_size = inputs_embeds.shape[0]
+        prefix_len = prompt.shape[0]
+        prompt_emb = prompt.unsqueeze(0).expand(batch_size, -1, -1).to(inputs_embeds.dtype)
+
+        is_left_padded = bool((attention_mask[:, 0] == 0).any().item())
+        if self.is_encoder_decoder or not is_left_padded:
+            prefix_mask = torch.ones(
+                batch_size,
+                prefix_len,
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+            return (
+                torch.cat([prompt_emb, inputs_embeds], dim=1),
+                torch.cat([prefix_mask, attention_mask], dim=1),
+            )
+
+        pad_counts = (attention_mask == 0).sum(dim=1)
+        new_seq_len = inputs_embeds.shape[1] + prefix_len
+        new_inputs_embeds = torch.zeros(
+            batch_size,
+            new_seq_len,
+            inputs_embeds.shape[2],
+            dtype=inputs_embeds.dtype,
+            device=inputs_embeds.device,
+        )
+        new_attention_mask = torch.zeros(
+            batch_size,
+            new_seq_len,
+            dtype=attention_mask.dtype,
+            device=attention_mask.device,
+        )
+        for b in range(batch_size):
+            n_pad = int(pad_counts[b].item())
+            new_inputs_embeds[b, :n_pad] = inputs_embeds[b, :n_pad]
+            new_inputs_embeds[b, n_pad:n_pad + prefix_len] = prompt_emb[b]
+            new_inputs_embeds[b, n_pad + prefix_len:] = inputs_embeds[b, n_pad:]
+            new_attention_mask[b, n_pad:n_pad + prefix_len] = 1
+            new_attention_mask[b, n_pad + prefix_len:] = attention_mask[b, n_pad:]
+        return new_inputs_embeds, new_attention_mask
     
 
     # Concatenate newly learned prompt to the joint "Progressive Prompts"
@@ -168,9 +244,10 @@ class PP(CL_Base_Model):
 
         if task_num!=None and self.prefix_MLP!=None:
             with torch.no_grad():
-                new_prompt = self.model.model.mlps[task_num](self.model.model.prompt)
+                prompt_container = self._prompt_container()
+                new_prompt = prompt_container.mlps[task_num](prompt_container.prompt)
         else:
-            new_prompt = self.model.model.prompt
+            new_prompt = self._prompt_container().prompt
 
         # Detach so previous_prompts is always a frozen leaf tensor with no
         # gradient path back to any MLP or prompt parameter.  Without this,
@@ -227,36 +304,11 @@ class PP(CL_Base_Model):
             inputs_embeds = self.embed_tokens(batch["input_ids"]).to(self.device)
 
             if prompt is not None:
-                batch_size = inputs_embeds.shape[0]
-                prefix_len = prompt.shape[0]
-                attn_mask = batch["attention_mask"]  # [B, seq_len], left-padded (0=pad, 1=real)
-
-                # For left-padded inputs, insert prompt embeddings between the
-                # padding tokens and the real tokens so the causal LM attends to
-                # them in the correct order: [pad... | prompt... | real_tokens...]
-                pad_counts = (attn_mask == 0).sum(dim=1)  # [B] number of pad tokens per sample
-                new_seq_len = inputs_embeds.shape[1] + prefix_len
-                prompt_emb = prompt.unsqueeze(0).expand(batch_size, -1, -1)  # [B, prefix_len, d]
-
-                new_inputs_embeds = torch.zeros(
-                    batch_size, new_seq_len, inputs_embeds.shape[2],
-                    dtype=inputs_embeds.dtype, device=inputs_embeds.device
+                inputs_embeds, source_mask_updated = self._prepend_prompt(
+                    inputs_embeds,
+                    batch["attention_mask"],
+                    prompt,
                 )
-                new_attn_mask = torch.zeros(
-                    batch_size, new_seq_len, dtype=attn_mask.dtype, device=attn_mask.device
-                )
-                for b in range(batch_size):
-                    n_pad = int(pad_counts[b].item())
-                    # Layout: [pad_tokens | prompt_tokens | real_tokens]
-                    new_inputs_embeds[b, :n_pad] = inputs_embeds[b, :n_pad]
-                    new_inputs_embeds[b, n_pad:n_pad + prefix_len] = prompt_emb[b]
-                    new_inputs_embeds[b, n_pad + prefix_len:] = inputs_embeds[b, n_pad:]
-                    # Mask: padding=0, prompt=1, real tokens follow original mask
-                    new_attn_mask[b, n_pad:n_pad + prefix_len] = 1
-                    new_attn_mask[b, n_pad + prefix_len:] = attn_mask[b, n_pad:]
-
-                inputs_embeds = new_inputs_embeds
-                source_mask_updated = new_attn_mask
             else:
                 source_mask_updated = batch["attention_mask"]
 
@@ -323,9 +375,10 @@ class PP(CL_Base_Model):
                           task_num=None,
                           progressive=True):
         embed_prompt = self.prefix_MLP!=None
+        prompt_container = self._prompt_container()
         if embed_prompt:
             assert task!=None
-            mlp = self.model.model.mlps[task_num]
+            mlp = prompt_container.mlps[task_num]
 
         batch = {k: batch[k].to(self.device) for k in batch}
         lm_labels = batch["labels"]
@@ -335,33 +388,28 @@ class PP(CL_Base_Model):
         inputs_embeds = self.embed_tokens(batch["input_ids"])  #向量，【batch * embedding_size】
         k = inputs_embeds.shape[0]
         if embed_prompt:
-            prompt = mlp(self.model.model.prompt)
+            prompt = mlp(prompt_container.prompt)
         else:
-            prompt = self.model.model.prompt
+            prompt = prompt_container.prompt
         
         
         '''
         增量添加prompt代码处
         '''
-        if progressive:
-            inputs_embeds = torch.concat([prompt.repeat(k, 1, 1),
-                                          self.previous_prompts.repeat(k, 1, 1),
-                                          inputs_embeds], axis=1)
-            full_prefix_len = self.previous_prompts.shape[0] + prompt.shape[0] # prefix including all previous tasks
-        else:
-            inputs_embeds = torch.concat([prompt.repeat(k, 1, 1),
-                                          inputs_embeds], axis=1)
-            full_prefix_len = prompt.shape[0]
-            
-        source_mask_updated = torch.concat((torch.tensor(1).to("cuda").repeat(k,full_prefix_len),
-                                             batch["attention_mask"]), axis=1)
+        full_prompt = torch.concat([prompt, self.previous_prompts], axis=0) if progressive else prompt
+        inputs_embeds, source_mask_updated = self._prepend_prompt(
+            inputs_embeds,
+            batch["attention_mask"],
+            full_prompt,
+        )
 
         # Prefix positions must be ignored by the loss — fill with -100.
-        prefix_ignore = torch.full(
-            (k, inputs_embeds.shape[1] - lm_labels.shape[1]),
-            fill_value=-100, dtype=lm_labels.dtype, device=lm_labels.device
-        )
-        lm_labels = torch.concat([prefix_ignore, lm_labels], axis=1)
+        if not self.is_encoder_decoder:
+            prefix_ignore = torch.full(
+                (k, inputs_embeds.shape[1] - lm_labels.shape[1]),
+                fill_value=-100, dtype=lm_labels.dtype, device=lm_labels.device
+            )
+            lm_labels = torch.concat([prefix_ignore, lm_labels], axis=1)
 
         
         '''
@@ -405,7 +453,7 @@ class PP(CL_Base_Model):
 
         for task_num in tasks:
             #for name, param in self.prefix_MLPs[t].named_parameters():
-            for name, param in self.model.model.mlps[task_num].named_parameters():
+            for name, param in self._prompt_container().mlps[task_num].named_parameters():
                 if param.requires_grad != requires_grad:
                     param.requires_grad = requires_grad
                     param.grad = None # remove old gradient
@@ -426,9 +474,9 @@ class PP(CL_Base_Model):
             assert self.prefix_len>0 # can only do progressive prompts when prompt tuning
             print('progressive prompts')
         print_rank_0(
-            f"[task={task}] prompt shape: {self.model.model.prompt.shape}, "
+            f"[task={task}] prompt shape: {self._prompt_container().prompt.shape}, "
             f"previous_prompts shape: {self.previous_prompts.shape}, "
-            f"total prefix len: {self.model.model.prompt.shape[0] + self.previous_prompts.shape[0]}",
+            f"total prefix len: {self._prompt_container().prompt.shape[0] + self.previous_prompts.shape[0]}",
             self.args.global_rank,
         )
         if self.early_stopping:
@@ -436,12 +484,12 @@ class PP(CL_Base_Model):
 
         if self.prefix_MLP!=None:
             print('Freezing all MLPs except for ', task)
-            mlp = self.model.model.mlps[task_num]
+            mlp = self._prompt_container().mlps[task_num]
             self.freeze_unfreeze_mlps([x for x in range(len(self.train_task_list)) if x!=task_num], requires_grad=False)
             self.freeze_unfreeze_mlps([task_num], requires_grad=True) # unfreezing current task
 
         model = self.model
-        model.model.prompt.requires_grad=True
+        self._prompt_container().prompt.requires_grad=True
         # with torch.no_grad():
         #     # prompts = nn.Parameter(torch.tensor(self.init_new_prompt(self.prefix_len),
         #     #                             requires_grad=True))
@@ -486,10 +534,10 @@ class PP(CL_Base_Model):
             if self.prefix_MLP!=None:
                 #生成prompt并拼接到previous_prompts
                 mlp.eval()
-                prompt = mlp(self.model.model.prompt)
+                prompt = mlp(self._prompt_container().prompt)
             else:
                 if self.prefix_len>0:
-                    prompt = self.model.model.prompt
+                    prompt = self._prompt_container().prompt
                     print(prompt.shape)
                 else:
                     prompt = None
@@ -519,7 +567,7 @@ class PP(CL_Base_Model):
             curr_prompt = self.previous_prompts.clone().detach().to(self.device)
         else:
             if self.prefix_len>0:
-                curr_prompt = self.model.model.prompt
+                curr_prompt = self._prompt_container().prompt
             else:
                 curr_prompt = None
         # log_dict = {
@@ -600,7 +648,6 @@ class PP(CL_Base_Model):
             self.save_model(i_task)
 
 def convert_PP_model(model, args):
-    
     def init_new_prompt(prompt_len):
         N = args.embed_tokens_length
         prompt_weigths = []
@@ -614,7 +661,16 @@ def convert_PP_model(model, args):
 
         prompt_weigths = np.array(prompt_weigths)
         return prompt_weigths
-    model.model.prompt = nn.Parameter(torch.tensor(init_new_prompt(args.prefix_len),requires_grad=True))
-    model.model.mlps = nn.ModuleList([ResMLP(bottleneck_size=2*args.embed_tokens_dim, emb_dimension=args.embed_tokens_dim) for _ in range(args.task_length)])
+    prompt_container = get_prompt_container(model)
+    prompt_container.prompt = nn.Parameter(
+        args.embed_tokens.weight.detach().new_tensor(
+            init_new_prompt(args.prefix_len),
+            requires_grad=True,
+        )
+    )
+    prompt_container.mlps = nn.ModuleList([
+        ResMLP(bottleneck_size=2*args.embed_tokens_dim, emb_dimension=args.embed_tokens_dim)
+        for _ in range(args.task_length)
+    ])
     
     return model

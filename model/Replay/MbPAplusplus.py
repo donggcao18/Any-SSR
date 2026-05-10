@@ -16,6 +16,7 @@ from utils.data.data_utils import create_prompt_dataset
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, \
     get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from utils.model.model_utils import decode_generated_sequences, is_encoder_decoder_model
 
 generation_config = GenerationConfig(
     temperature=0.1,
@@ -121,11 +122,25 @@ class MbPAplusplus(CL_Base_Model):
         self.memory_per_task = memory_per_task
         self.train_batch_size = self.args.per_device_train_batch_size
         self.eval_batch_size = self.args.per_device_eval_batch_size
+        self.is_encoder_decoder = bool(
+            getattr(args, "is_encoder_decoder", False) or is_encoder_decoder_model(model)
+        )
 
 
     def get_keys(self,batch):
-        outputs = self.model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], output_hidden_states=True)
-        keys = outputs.hidden_states[-1]  #最后一层的输出，hidden_states
+        if self.is_encoder_decoder:
+            model = self.model.module if hasattr(self.model, "module") else self.model
+            encoder = model.get_encoder()
+            outputs = encoder(
+                input_ids=batch['input_ids'],
+                attention_mask=batch['attention_mask'],
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            keys = outputs.last_hidden_state
+        else:
+            outputs = self.model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], output_hidden_states=True)
+            keys = outputs.hidden_states[-1]  #最后一层的输出，hidden_states
         keys = keys[:, 0, :].squeeze(1) #取第一个token, (bs, hidden_size)
         
         return keys
@@ -190,7 +205,10 @@ class MbPAplusplus(CL_Base_Model):
                 # Get the key representation of documents
                 
                 #节省计算，不调用get_keys()
-                keys = outputs.hidden_states[-1]  #最后一层的输出，hidden_states
+                if self.is_encoder_decoder:
+                    keys = outputs.encoder_last_hidden_state
+                else:
+                    keys = outputs.hidden_states[-1]  #最后一层的输出，hidden_states
                 keys = keys[:, 0, :].squeeze(1) #取第一个token, (bs, hidden_size)
                 # Push the examples into the replay memory
                 
@@ -301,8 +319,12 @@ class MbPAplusplus(CL_Base_Model):
                                                     num_return_sequences=1,
                                                     use_cache=True
                                                     )
-                    sequences = self.tokenizer.batch_decode(generate_ids[:, prompt_len:], skip_special_tokens=True,
-                                                    clean_up_tokenization_spaces=False)
+                    sequences = decode_generated_sequences(
+                        self.tokenizer,
+                        generate_ids,
+                        prompt_len=prompt_len,
+                        is_encoder_decoder=self.is_encoder_decoder,
+                    )
                     predicted_sequences += sequences
                     
                     for idx,(name, param) in enumerate(self.model.named_parameters()):

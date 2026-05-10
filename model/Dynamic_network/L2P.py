@@ -5,6 +5,7 @@ import torch.utils.data
 from tqdm.auto import tqdm
 from torch import nn
 from model.base_model import CL_Base_Model
+from model.Dynamic_network.PP import get_prompt_container
 import numpy as np
 from deepspeed.utils import safe_get_full_grad
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
@@ -39,7 +40,13 @@ def convert_L2P_model(model, args):
     # if args.prompt_init == 'zero':
     #     model.model.prompt = nn.Parameter(torch.zeros(prompt_pool_shape, dtype=torch.bfloat16,requires_grad=True)).to("cuda")
     if args.prompt_init == 'uniform':
-        model.model.prompt = nn.Parameter(torch.tensor(init_new_prompt(args.pool_size , args.prompt_length),requires_grad=True))
+        prompt_container = get_prompt_container(model)
+        prompt_container.prompt = nn.Parameter(
+            args.embed_tokens.weight.detach().new_tensor(
+                init_new_prompt(args.pool_size, args.prompt_length),
+                requires_grad=True,
+            )
+        )
             
     return model
 
@@ -64,8 +71,65 @@ class L2P(CL_Base_Model):
         
         # use mean of prompt as key
         # only compatible with prompt, not prefix
-        prompt_mean = torch.mean(self.model.model.prompt, dim=1)
+        prompt_mean = torch.mean(self._prompt_container().prompt, dim=1)
         self.prompt_key = prompt_mean
+
+    def _prompt_container(self):
+        return get_prompt_container(self.model)
+
+    def _prefix_attention_mask(self, attention_mask, prefix_length, batch_size):
+        prefix_mask = torch.ones(
+            batch_size,
+            prefix_length,
+            dtype=attention_mask.dtype,
+            device=attention_mask.device,
+        )
+        return torch.cat([prefix_mask, attention_mask], dim=1)
+
+    def _apply_prompt_pool(self, input_ids, attention_mask, prompt_mask=None, cls_features=None):
+        inputs_embeds = self.embed_tokens(input_ids)
+
+        if self.embedding_key == 'mean':
+            inputs_embeds_mean = torch.mean(inputs_embeds, dim=1)
+        elif self.embedding_key == 'max':
+            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0]
+        elif self.embedding_key == 'mean_max':
+            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0] + 2 * torch.mean(inputs_embeds, dim=1)
+        elif self.embedding_key == 'cls':
+            if cls_features is None:
+                inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0]
+            else:
+                inputs_embeds_mean = cls_features
+        else:
+            raise NotImplementedError("Not supported way of calculating embedding keys!")
+
+        prompt_norm = self.l2_normalize(self.prompt_key, dim=1).to(inputs_embeds.device)
+        inputs_embeds_norm = self.l2_normalize(inputs_embeds_mean, dim=1)
+        similarity = torch.matmul(inputs_embeds_norm, prompt_norm.t())
+        if prompt_mask is None:
+            _, idx = torch.topk(similarity, k=self.top_k, dim=1)
+            if self.batchwise_prompt:
+                prompt_id, id_counts = torch.unique(idx, return_counts=True, sorted=True)
+                if prompt_id.shape[0] < self.pool_size:
+                    prompt_id = torch.cat([
+                        prompt_id,
+                        torch.full((self.pool_size - prompt_id.shape[0],), torch.min(idx.flatten()), device=prompt_id.device)
+                    ])
+                    id_counts = torch.cat([
+                        id_counts,
+                        torch.full((self.pool_size - id_counts.shape[0],), 0, device=id_counts.device)
+                    ])
+                _, major_idx = torch.topk(id_counts, k=self.top_k)
+                idx = prompt_id[major_idx].expand(inputs_embeds.shape[0], -1)
+        else:
+            idx = prompt_mask
+
+        batched_prompt_raw = self._prompt_container().prompt[idx]
+        batch_size, top_k, length, c = batched_prompt_raw.shape
+        batched_prompt = batched_prompt_raw.reshape(batch_size, top_k * length, c).to(inputs_embeds.dtype)
+        inputs_embeds = torch.cat([batched_prompt, inputs_embeds], axis=1)
+        attention_mask = self._prefix_attention_mask(attention_mask, batched_prompt.shape[1], batch_size)
+        return inputs_embeds, attention_mask, inputs_embeds_norm, prompt_norm, idx
     
     def l2_normalize(self, x, dim=None, epsilon=1e-12):
         """Normalizes a given vector or matrix."""
@@ -77,53 +141,15 @@ class L2P(CL_Base_Model):
         input_ids = batch['input_ids']
         attn_masks = batch['attention_mask']
         labels = batch['labels']
-        inputs_embeds = self.embed_tokens(input_ids)
-        
-        out = dict()
-        if self.embedding_key == 'mean':
-            inputs_embeds_mean = torch.mean(inputs_embeds, dim=1)
-        elif self.embedding_key == 'max':
-            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0]
-        elif self.embedding_key == 'mean_max':
-            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0] + 2 * torch.mean(inputs_embeds, dim=1)
-        elif self.embedding_key == 'cls':
-            if cls_features is None:
-                inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0] # B, C
-            else:
-                inputs_embeds_mean = cls_features
-        else:
-            raise NotImplementedError("Not supported way of calculating embedding keys!")
-
-        prompt_norm = self.l2_normalize(self.prompt_key, dim=1).to("cuda") # Pool_size, C
-        inputs_embeds_norm = self.l2_normalize(inputs_embeds_mean, dim=1) # B, C
-
-        similarity = torch.matmul(inputs_embeds_norm, prompt_norm.t()) # B, Pool_size
-        
-        if prompt_mask is None:
-            _, idx = torch.topk(similarity, k=self.top_k, dim=1) # B, top_k
-            if self.batchwise_prompt:
-                prompt_id, id_counts = torch.unique(idx, return_counts=True, sorted=True)
-                # In jnp.unique, when the 'size' is specified and there are fewer than the indicated number of elements,
-                # the remaining elements will be filled with 'fill_value', the default is the minimum value along the specified dimension.
-                # Unless dimension is specified, this will be flattend if it is not already 1D.
-                if prompt_id.shape[0] < self.pool_size:
-                    prompt_id = torch.cat([prompt_id, torch.full((self.pool_size - prompt_id.shape[0],), torch.min(idx.flatten()), device=prompt_id.device)])
-                    id_counts = torch.cat([id_counts, torch.full((self.pool_size - id_counts.shape[0],), 0, device=id_counts.device)])
-                _, major_idx = torch.topk(id_counts, k=self.top_k) # top_k
-                major_prompt_id = prompt_id[major_idx] # top_k
-                # expand to batch
-                idx = major_prompt_id.expand(inputs_embeds.shape[0], -1) # B, top_k
-        else:
-            idx = prompt_mask # B, top_k
-
-        batched_prompt_raw = self.model.model.prompt[idx] # B, top_k, length, C
-        batch_size, top_k, length, c = batched_prompt_raw.shape
-        batched_prompt = batched_prompt_raw.reshape(batch_size, top_k * length, c) # B, top_k * length, C
-        inputs_embeds = torch.cat([batched_prompt, inputs_embeds],axis=1)
-        
-        prefix_length = batched_prompt.shape[1]
-        attn_masks = torch.concat((torch.tensor(1).to("cuda").repeat(batch_size,prefix_length),attn_masks), axis=1)
-        labels = torch.concat((labels[0][0].repeat(batch_size,inputs_embeds.shape[1]-labels.shape[1]),labels),axis=1)
+        inputs_embeds, attn_masks, inputs_embeds_norm, prompt_norm, idx = self._apply_prompt_pool(
+            input_ids,
+            attn_masks,
+            prompt_mask=prompt_mask,
+            cls_features=cls_features,
+        )
+        batch_size = input_ids.shape[0]
+        if not self.is_encoder_decoder:
+            labels = torch.concat((labels[0][0].repeat(batch_size,inputs_embeds.shape[1]-labels.shape[1]),labels),axis=1)
         outputs = self.model(inputs_embeds=inputs_embeds, labels=labels, attention_mask=attn_masks, use_cache=False)
         loss = outputs[0]
         
@@ -134,6 +160,77 @@ class L2P(CL_Base_Model):
 
         loss -= reduce_sim * self.pull_constraint_coeff
         return loss
+
+    def task_generation_evaluation(self, task, test_dataloader, device, max_ans_len=None, return_predictions=False):
+        self.model.eval()
+        predicted_sequences = []
+        sources_sequences = []
+        ground_truths = []
+
+        if max_ans_len is None:
+            max_ans_len = getattr(self.args, "max_ans_len", 256)
+
+        progress_bar = tqdm(total=len(test_dataloader), leave=True, disable=(self.args.global_rank != 0))
+        for step, batch in enumerate(test_dataloader):
+            sources_sequences += batch['sources']
+            if 'gts' in batch:
+                ground_truths += batch['gts']
+                del batch['gts']
+            elif 'labels' in batch:
+                label_tensor = batch['labels']
+                for row in label_tensor:
+                    valid_ids = row[row != -100].detach().cpu().tolist()
+                    ground_truths.append(
+                        self.tokenizer.decode(valid_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    )
+                del batch['labels']
+            else:
+                ground_truths += [''] * len(batch['sources'])
+
+            del batch['sources']
+            batch = to_device(batch, device)
+            inputs_embeds, attn_masks, _, _, _ = self._apply_prompt_pool(
+                batch['input_ids'],
+                batch['attention_mask'],
+            )
+
+            with torch.no_grad():
+                pad_token_id = self.tokenizer.pad_token_id
+                if pad_token_id is None:
+                    pad_token_id = self.tokenizer.eos_token_id
+                generate_ids = self.model.generate(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attn_masks,
+                    max_new_tokens=max_ans_len,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=pad_token_id,
+                    generation_config=self.generation_config,
+                    use_cache=True,
+                )
+
+            sequences = self.tokenizer.batch_decode(
+                generate_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            predicted_sequences += sequences
+
+            if self.args.global_rank == 0:
+                progress_bar.update(1)
+                progress_bar.set_description(f"Test step {step}", refresh=False)
+
+        metrics = self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
+        if return_predictions:
+            prediction_rows = [
+                {
+                    "source": source,
+                    "ground-truth": gt,
+                    "prediction": pred,
+                }
+                for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
+            ]
+            return metrics, prediction_rows
+        return metrics
     
     
     
@@ -143,7 +240,7 @@ class L2P(CL_Base_Model):
 
         dataloader_train = self.train_task_list[task]
         self.train_length = len(dataloader_train)
-        total_steps = self.args.num_train_epochs * len(dataloader_train)
+        total_steps = epochs * len(dataloader_train)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
 
 
@@ -229,13 +326,13 @@ class L2P(CL_Base_Model):
                     _, idx = torch.topk(similarity, k=self.top_k, dim=1) # B, top_k
                         
 
-                    batched_prompt_raw = self.model.model.prompt[idx] # B, top_k, length, C
+                    batched_prompt_raw = self._prompt_container().prompt[idx] # B, top_k, length, C
                     batch_size, top_k, length, c = batched_prompt_raw.shape
                     batched_prompt = batched_prompt_raw.reshape(batch_size, top_k * length, c) # B, top_k * length, C
                     inputs_embeds = torch.cat([batched_prompt, inputs_embeds],axis=1)
                     
                     prefix_length = batched_prompt.shape[1]
-                    attn_masks = torch.concat((torch.tensor(1).to("cuda").repeat(batch_size,prefix_length),attn_masks), axis=1)                    
+                    attn_masks = self._prefix_attention_mask(attn_masks, prefix_length, batch_size)
                     
                     generate_ids = model.generate(inputs_embeds=inputs_embeds,
                                                   attention_mask=attn_masks,
@@ -252,8 +349,12 @@ class L2P(CL_Base_Model):
                 gathered_labels, max_label_len = self.dist_results_gather(ground_truths_ids, self.tokenizer.eos_token_id)
 
                 if self.args.global_rank <= 0:
-                    sou_sequences = self.tokenizer.batch_decode(gathered_ids[:, : max_seq_len], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                    pre_sequences = self.tokenizer.batch_decode(gathered_ids[:, max_seq_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    if self.is_encoder_decoder:
+                        sou_sequences = [""] * gathered_ids.shape[0]
+                        pre_sequences = self.tokenizer.batch_decode(gathered_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                    else:
+                        sou_sequences = self.tokenizer.batch_decode(gathered_ids[:, : max_seq_len], skip_special_tokens=True, clean_up_tokenization_spaces=False)
+                        pre_sequences = self.tokenizer.batch_decode(gathered_ids[:, max_seq_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False)
                     lab_sequences = self.tokenizer.batch_decode(gathered_labels[:, : max_label_len], skip_special_tokens=True, clean_up_tokenization_spaces=False)
                     predicted_sequences += pre_sequences
                     sources_sequences += sou_sequences

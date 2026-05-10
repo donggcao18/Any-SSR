@@ -10,6 +10,7 @@ from utils.utils import print_rank_0, to_device, get_all_reduce_mean
 from utils.data.data_utils import create_prompt_dataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from utils.model.model_utils import decode_generated_sequences, is_encoder_decoder_model
 
 
 def getInitialPrompt(tokenizer, prompt_token_number):
@@ -55,6 +56,9 @@ class LFPT5(CL_Base_Model):
         else:
             torch.cuda.set_device(self.args.local_rank)
             self.device = torch.device("cuda", self.args.local_rank)
+        self.is_encoder_decoder = bool(
+            getattr(args, "is_encoder_decoder", False) or is_encoder_decoder_model(model)
+        )
 
 
     def get_dataloader(self, task, pseudo_prompts, pseudo_answers):
@@ -81,7 +85,8 @@ class LFPT5(CL_Base_Model):
             max_prompt_len=self.args.max_prompt_len,
             max_ans_len=self.args.max_ans_len,
             pad_to_multiple_of=8,
-            inference=False
+            inference=False,
+            is_encoder_decoder=self.is_encoder_decoder,
         )
         dataloader = DataLoader(dataset,
                             collate_fn=collator,
@@ -112,8 +117,12 @@ class LFPT5(CL_Base_Model):
                                               num_return_sequences=1,
                                               use_cache=True
                                               )
-            sequences = self.tokenizer.batch_decode(generate_ids[:, prompt_len:], skip_special_tokens=True,
-                                               clean_up_tokenization_spaces=False)
+            sequences = decode_generated_sequences(
+                self.tokenizer,
+                generate_ids,
+                prompt_len=prompt_len,
+                is_encoder_decoder=self.is_encoder_decoder,
+            )
             pseudo_answers += sequences
         return pseudo_prompts, pseudo_answers
 
