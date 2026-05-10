@@ -22,7 +22,7 @@ conda activate anyssr-olora
 pip install -r requirements.txt
 
 pip uninstall torch
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip3 install torch --index-url https://download.pytorch.org/whl/cu128
 FLASH_ATTENTION_SKIP_CUDA_BUILD=TRUE pip install flash-attn==2.7.2.post1 --no-build-isolation
 
 ```
