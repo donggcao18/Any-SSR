@@ -12,14 +12,14 @@ from typing import Dict, List, TypedDict
 
 
 TASK_LIST: List[str] = [
+    "CONCODE",
     "CodeTrans",
     "CodeSearchNet",
     "BFP",
-    "CONCODE",
     "KodCode",
     "RunBugRun",
-    "CoST",
     "TheVault_Csharp",
+    "CoST"
 ]
 
 
