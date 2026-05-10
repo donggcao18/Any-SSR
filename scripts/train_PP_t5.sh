@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 
 set -euo pipefail
 
@@ -10,14 +10,14 @@ port=$(shuf -i25000-30000 -n1)
 deepspeed --master_port "$port" training/main_anamoe.py \
    --model_name_or_path Salesforce/codet5-base \
    --data_path "" \
-   --dataset_name CodeTrans \
+   --dataset_name CodeTrans,CONCODE \
    --per_device_train_batch_size 8 \
    --per_device_eval_batch_size 8 \
    --gradient_accumulation_steps 2 \
    --max_prompt_len 320 \
    --max_ans_len 256 \
    --learning_rate 0.1 \
-   --num_train_epochs 3 \
+   --num_train_epochs 1 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
    --seed 1234 \
@@ -28,4 +28,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --output_dir ./output_models/t5_pp/CodeTrans \
    --run_name t5_pp_CodeTrans \
    --group_name t5_pp_CodeTrans \
-   --logging_steps 10
+   --logging_steps 10 \
+   --logging_steps 10 \
+   --num_train 5000 \
+   --num_eval 100 \
+   --num_test 100 \

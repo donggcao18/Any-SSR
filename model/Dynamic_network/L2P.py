@@ -68,14 +68,25 @@ class L2P(CL_Base_Model):
         self.top_k = top_k
         self.batchwise_prompt = batchwise_prompt
         self.pull_constraint_coeff = pull_constraint_coeff
-        
-        # use mean of prompt as key
-        # only compatible with prompt, not prefix
-        prompt_mean = torch.mean(self._prompt_container().prompt, dim=1)
-        self.prompt_key = prompt_mean
+        self.pool_size = self.args.pool_size
 
     def _prompt_container(self):
         return get_prompt_container(self.model)
+
+    def _prompt_key(self):
+        # Use the current trainable prompt pool as keys. Keeping this as a
+        # cached tensor makes retrieval depend on stale initialization values.
+        return torch.mean(self._prompt_container().prompt, dim=1)
+
+    def _masked_mean(self, inputs_embeds, attention_mask):
+        mask = attention_mask.unsqueeze(-1).to(inputs_embeds.dtype)
+        denom = mask.sum(dim=1).clamp(min=1.0)
+        return (inputs_embeds * mask).sum(dim=1) / denom
+
+    def _masked_max(self, inputs_embeds, attention_mask):
+        mask = attention_mask.unsqueeze(-1).bool()
+        masked = inputs_embeds.masked_fill(~mask, torch.finfo(inputs_embeds.dtype).min)
+        return torch.max(masked, dim=1)[0]
 
     def _prefix_attention_mask(self, attention_mask, prefix_length, batch_size):
         prefix_mask = torch.ones(
@@ -90,20 +101,20 @@ class L2P(CL_Base_Model):
         inputs_embeds = self.embed_tokens(input_ids)
 
         if self.embedding_key == 'mean':
-            inputs_embeds_mean = torch.mean(inputs_embeds, dim=1)
+            inputs_embeds_mean = self._masked_mean(inputs_embeds, attention_mask)
         elif self.embedding_key == 'max':
-            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0]
+            inputs_embeds_mean = self._masked_max(inputs_embeds, attention_mask)
         elif self.embedding_key == 'mean_max':
-            inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0] + 2 * torch.mean(inputs_embeds, dim=1)
+            inputs_embeds_mean = self._masked_max(inputs_embeds, attention_mask) + 2 * self._masked_mean(inputs_embeds, attention_mask)
         elif self.embedding_key == 'cls':
             if cls_features is None:
-                inputs_embeds_mean = torch.max(inputs_embeds, dim=1)[0]
+                inputs_embeds_mean = self._masked_max(inputs_embeds, attention_mask)
             else:
                 inputs_embeds_mean = cls_features
         else:
             raise NotImplementedError("Not supported way of calculating embedding keys!")
 
-        prompt_norm = self.l2_normalize(self.prompt_key, dim=1).to(inputs_embeds.device)
+        prompt_norm = self.l2_normalize(self._prompt_key(), dim=1).to(inputs_embeds.device)
         inputs_embeds_norm = self.l2_normalize(inputs_embeds_mean, dim=1)
         similarity = torch.matmul(inputs_embeds_norm, prompt_norm.t())
         if prompt_mask is None:
@@ -258,7 +269,7 @@ class L2P(CL_Base_Model):
                     progress_bar.update(1)
                     description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
                     progress_bar.set_description(description, refresh=False)
-                self.model.backward(loss, retain_graph=True)
+                self.model.backward(loss)
                 # for n, lp in self.model.named_parameters():
                 #     # 1. gradient lookup
                 #     # For zero1 and zero2, gradient lookup must be called after `backward` and before `step`
@@ -282,6 +293,7 @@ class L2P(CL_Base_Model):
             device = torch.device("cuda", self.args.local_rank)
 
         infer_dataloader = self.test_task_list[task]
+        max_ans_len = self._resolve_max_ans_len(infer_task_id)
 
         progress_bar = tqdm(total=len(infer_dataloader), leave=True, disable=(self.args.global_rank != 0))
         
@@ -294,7 +306,7 @@ class L2P(CL_Base_Model):
             for step, batch in enumerate(infer_dataloader):
                 ground_truths_ids = self.tokenizer(batch['gts'], 
                                                    truncation=True,
-                                                   max_length=self.args.max_ans_len,
+                                                   max_length=max_ans_len,
                                                    add_special_tokens=False,
                                                    padding='max_length',
                                                    return_tensors='pt')['input_ids'].to(device)
@@ -310,36 +322,17 @@ class L2P(CL_Base_Model):
                     progress_bar.set_description(description, refresh=False)
 
                 with torch.no_grad():
-                    # sft config
-                    input_ids = batch['input_ids']
-                    attn_masks = batch['attention_mask']
-                    inputs_embeds = self.embed_tokens(input_ids)
-
-                    if self.embedding_key == 'mean':
-                        inputs_embeds_mean = torch.mean(inputs_embeds, dim=1)
-
-                    prompt_norm = self.l2_normalize(self.prompt_key, dim=1).to("cuda") # Pool_size, C
-                    inputs_embeds_norm = self.l2_normalize(inputs_embeds_mean, dim=1) # B, C
-
-                    similarity = torch.matmul(inputs_embeds_norm, prompt_norm.t()) # B, Pool_size
-
-                    _, idx = torch.topk(similarity, k=self.top_k, dim=1) # B, top_k
-                        
-
-                    batched_prompt_raw = self._prompt_container().prompt[idx] # B, top_k, length, C
-                    batch_size, top_k, length, c = batched_prompt_raw.shape
-                    batched_prompt = batched_prompt_raw.reshape(batch_size, top_k * length, c) # B, top_k * length, C
-                    inputs_embeds = torch.cat([batched_prompt, inputs_embeds],axis=1)
-                    
-                    prefix_length = batched_prompt.shape[1]
-                    attn_masks = self._prefix_attention_mask(attn_masks, prefix_length, batch_size)
+                    inputs_embeds, attn_masks, _, _, _ = self._apply_prompt_pool(
+                        batch['input_ids'],
+                        batch['attention_mask'],
+                    )
                     
                     generate_ids = model.generate(inputs_embeds=inputs_embeds,
                                                   attention_mask=attn_masks,
-                                                  max_new_tokens=self.args.max_ans_len,
+                                                  max_new_tokens=max_ans_len,
                                                   bos_token_id=self.tokenizer.bos_token_id,
                                                   eos_token_id=self.tokenizer.eos_token_id,
-                                                  pad_token_id=self.tokenizer.unk_token_id,
+                                                  pad_token_id=self.tokenizer.pad_token_id,
                                                   generation_config=generation_config,
                                                 use_cache=False
 
