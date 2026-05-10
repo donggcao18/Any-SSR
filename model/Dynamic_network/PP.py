@@ -159,6 +159,10 @@ class PP(CL_Base_Model):
         self.embed_tokens_dim = self.args.embed_tokens_dim
         self.embed_tokens_length = self.args.embed_tokens_length
         self.embed_tokens = self.args.embed_tokens
+        if self.is_encoder_decoder and prefix_MLP == "MLP2":
+            # T5 prompt tuning is more stable as direct encoder soft prompts.
+            # The decoder-only PP path keeps the historical MLP reparameterizer.
+            prefix_MLP = None
         self.prefix_MLP = prefix_MLP
 
 
@@ -194,6 +198,29 @@ class PP(CL_Base_Model):
 
     def _prompt_container(self):
         return get_prompt_container(self.model)
+
+    def _init_prompt_from_random_tokens(self):
+        weights = []
+        for _ in range(self.prefix_len):
+            with torch.no_grad():
+                token_idx = np.random.randint(self.embed_tokens_length)
+                weight = self.embed_tokens.weight[token_idx].detach().clone()
+                if not self.is_encoder_decoder:
+                    weight = weight / 100
+                weights.append(weight)
+        return torch.stack(weights, dim=0).to(self.device)
+
+    def _reset_optimizer_state_for_prompt(self):
+        prompt = self._prompt_container().prompt
+        optimizers = [
+            self.optimizer,
+            getattr(self.model, "optimizer", None),
+            getattr(self.optimizer, "optimizer", None),
+        ]
+        for optimizer in optimizers:
+            state = getattr(optimizer, "state", None)
+            if isinstance(state, dict) and prompt in state:
+                state[prompt].clear()
 
     def _prepend_prompt(self, inputs_embeds, attention_mask, prompt):
         batch_size = inputs_embeds.shape[0]
@@ -256,6 +283,9 @@ class PP(CL_Base_Model):
         self.previous_prompts = torch.concat(
             [new_prompt.clone().detach(), self.previous_prompts], axis=0
         )
+        with torch.no_grad():
+            self._prompt_container().prompt.copy_(self._init_prompt_from_random_tokens())
+        self._reset_optimizer_state_for_prompt()
         print('Updated progressive prompts ', self.previous_prompts.shape)
 
     def task_generation_evaluation(self,
@@ -656,7 +686,10 @@ def convert_PP_model(model, args):
             with torch.no_grad():
                 j = np.random.randint(N) # random token
                 w = deepcopy(args.embed_tokens.weight[j].detach().cpu().numpy())
-                prompt_weigths.append(w/100)
+                if getattr(args, "is_encoder_decoder", False):
+                    prompt_weigths.append(w)
+                else:
+                    prompt_weigths.append(w/100)
                 # prompt_weigths.append(w)
 
         prompt_weigths = np.array(prompt_weigths)
@@ -668,9 +701,13 @@ def convert_PP_model(model, args):
             requires_grad=True,
         )
     )
-    prompt_container.mlps = nn.ModuleList([
-        ResMLP(bottleneck_size=2*args.embed_tokens_dim, emb_dimension=args.embed_tokens_dim)
-        for _ in range(args.task_length)
-    ])
+    if getattr(args, "is_encoder_decoder", False):
+        if hasattr(prompt_container, "mlps"):
+            delattr(prompt_container, "mlps")
+    else:
+        prompt_container.mlps = nn.ModuleList([
+            ResMLP(bottleneck_size=2*args.embed_tokens_dim, emb_dimension=args.embed_tokens_dim)
+            for _ in range(args.task_length)
+        ])
     
     return model
