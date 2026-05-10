@@ -179,13 +179,27 @@ class L2P(CL_Base_Model):
                 f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
                 self.args.global_rank,
             )
-            self.evaluate_one_task(round=i_task, infer_task_id=i_task, task=task, infer_dataloader=self.eval_task_list[task])
+            self.evaluate_one_task(
+                round=i_task,
+                infer_task_id=i_task,
+                task=task,
+                infer_dataloader=self.eval_task_list[task],
+                save_results=True,
+                split_name=f"eval-epoch{epoch+1}",
+            )
 
         print_rank_0(
             f"***** Testing on current task {task} after all epochs *****",
             self.args.global_rank,
         )
-        self.evaluate_one_task(round=i_task, infer_task_id=i_task, task=task, infer_dataloader=self.test_task_list[task])
+        self.evaluate_one_task(
+            round=i_task,
+            infer_task_id=i_task,
+            task=task,
+            infer_dataloader=self.test_task_list[task],
+            save_results=True,
+            split_name="test-after-task",
+        )
 
     def test_all_tasks_and_save_predictions(self):
         self.args.output_dir = './L2P_final_results'
@@ -228,7 +242,7 @@ class L2P(CL_Base_Model):
 
         return flat_results, max_seq_len
         
-    def evaluate_one_task(self, round, infer_task_id, task, infer_dataloader, save_results=False):
+    def evaluate_one_task(self, round, infer_task_id, task, infer_dataloader, save_results=False, split_name="results"):
         device = self.device
 
         progress_bar = tqdm(total=len(infer_dataloader), leave=True, disable=(self.args.global_rank != 0))
@@ -351,10 +365,6 @@ class L2P(CL_Base_Model):
 
         def save_inference_results(evaluation_result: dict, sources_sequences: list, predicted_sequences: list,
                                    ground_truths: list, round: int, i_task: int, task: str):
-            # save as a json file
-            df = {"eval": evaluation_result}
-            if not os.path.exists(self.args.output_dir):
-                os.makedirs(self.args.output_dir)
             prediction_rows = [
                 {
                     "source": source,
@@ -363,9 +373,7 @@ class L2P(CL_Base_Model):
                 }
                 for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
             ]
-            df["predictions"] = prediction_rows
-            with open(self.args.output_dir + "/results-" + str(round) + "-" + str(i_task) + "-" + task + ".json", "w+", encoding='utf-8') as file:
-                json.dump(df, file, ensure_ascii=False)
+            self._save_generation_predictions(split_name, i_task, task, evaluation_result, prediction_rows)
 
 
         # Inference !

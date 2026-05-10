@@ -153,6 +153,7 @@ class LwF(CL_Base_Model):
                 return_predictions=True,
             )
             print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
+            self._save_generation_predictions(f"seen-test-after-task-{i_task}", seen_idx, eval_task, test_result, prediction_rows)
 
             if self.args.global_rank == 0:
                 eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")

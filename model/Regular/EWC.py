@@ -126,13 +126,15 @@ class EWC(CL_Base_Model):
         print_rank_0(
             f"***** Testing on current task {task} after all epochs *****",
             self.args.global_rank)
-        test_result = self.task_generation_evaluation(
+        test_result, test_predictions = self.task_generation_evaluation(
             task,
             self.test_task_list[task],
             self.device,
             max_ans_len=self._resolve_max_ans_len(i_task),
+            return_predictions=True,
         )
         print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
+        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
 
 
     
