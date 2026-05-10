@@ -10,14 +10,14 @@ port=$(shuf -i25000-30000 -n1)
 deepspeed --master_port "$port" training/main_anamoe.py \
    --model_name_or_path Salesforce/codet5-base \
    --data_path "" \
-   --dataset_name CodeTrans \
-   --per_device_train_batch_size 8 \
+   --dataset_name CodeTrans,CONCODE \
+   --per_device_train_batch_size 16 \
    --per_device_eval_batch_size 8 \
    --gradient_accumulation_steps 2 \
-   --max_prompt_len 320 \
-   --max_ans_len 256 \
+   --max_prompt_len 320,320 \
+   --max_ans_len 256,256 \
    --learning_rate 0.1 \
-   --num_train_epochs 3 \
+   --num_train_epochs 1,1 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
    --seed 1234 \
@@ -28,4 +28,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --output_dir ./output_models/t5_l2p/CodeTrans \
    --run_name t5_l2p_CodeTrans \
    --group_name t5_l2p_CodeTrans \
-   --logging_steps 10
+   --logging_steps 10 \
+   --num_train 2500 \
+   --num_eval 100 \
+   --num_test 100 \
