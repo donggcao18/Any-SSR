@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 
 set -euo pipefail
 
@@ -16,9 +16,9 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --benchmark executable \
     --data_path "" \
     --dataset_name "$dataset" \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 2 \
+    --gradient_accumulation_steps 8 \
     --max_prompt_len 1024 \
     --max_ans_len 2048 \
     --learning_rate 1e-4 \
@@ -33,12 +33,13 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --repetition_penalty 1 \
     --do_sample \
     --disable_epoch_eval \
-    --output_dir "./output_models/anamoe_executable/${dataset}" \
+    --output_dir "./output_models/lora_per_task_executable_start_0/${dataset}" \
     --run_name "anamoe_${dataset}" \
     --group_name "anamoe_executable_all" \
     --num_train 100 \
     --num_eval 50 \
     --num_test 50 \
-    --logging_steps 10
+    --logging_steps 10 \
+    --start_layer 0 \
 
 done

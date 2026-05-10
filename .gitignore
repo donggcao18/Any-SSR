@@ -1,2 +1,5 @@
 **/__pycache__/
 .env
+*.zip
+output_models/
+.cache/

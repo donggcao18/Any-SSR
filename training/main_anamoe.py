@@ -308,7 +308,7 @@ def parse_args():
                         help='Top-p for generation.')
     parser.add_argument('--top_k',
                         type=int,
-                        default=-1,
+                        default=0,
                         help='Top-k for generation (0 disables top-k sampling).')
     parser.add_argument('--repetition_penalty',
                         type=float,
@@ -329,6 +329,10 @@ def parse_args():
     parser.add_argument('--enable_wandb',
                 action='store_true',
                 help='Enable wandb logging.')
+    parser.add_argument('--start_layer',
+                    type=int,
+                    default=4,
+                    help='The start layer for Anamoe (inclusive).')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -484,7 +488,7 @@ def main():
 
         names = [name for name, param in model.named_parameters()]
 
-        start = 4
+        start = args.start_layer  # Anamoe starts from this layer (inclusive)
         end = 28  # Qwen2.5-Coder-1.5B has 28 layers (0-27)
         # filtered_names = [name for name in names if start <= int(name.split('.')[2]) < end]
 
@@ -542,7 +546,7 @@ def main():
         if args.benchmark == "non-executable":
             train_dataset, eval_dataset, test_dataset = create_codetask_dataset(dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i])
         else:
-            train_dataset, eval_dataset, test_dataset = create_executable_dataset(dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i])
+            train_dataset, eval_dataset, test_dataset = create_executable_dataset(dataset, args.seed, int(args.num_train[i]), int(args.num_eval[i]), int(args.num_test[i]))
 
         # DataLoaders creation:
         if args.local_rank == -1:
