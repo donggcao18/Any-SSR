@@ -311,7 +311,7 @@ def _hf_token() -> str | None:
     return os.environ.get("HF_TOKEN")
 
 def _load_split(repo_id: str, split: str) -> Dataset:
-    return load_dataset(repo_id, split=split, token=_hf_token(), download_mode="force_redownload")
+    return load_dataset(repo_id, split=split, token=_hf_token())
 
 
 def _limit_dataset(dataset: Dataset, max_samples: int=-1, seed: int=0) -> Dataset:
@@ -361,8 +361,8 @@ def _load_eval_dataset(language, max_eval_samples, seed=0) -> Dataset:
 
 def create_executable_dataset(dataset_name, seed, num_train, num_eval, num_test):
     train_dataset = _load_training_dataset(dataset_name, num_train, seed)
-    eval_dataset = _load_eval_dataset(dataset_name, num_eval, seed)
     test_dataset = _load_eval_dataset(dataset_name, num_test, seed)
+    eval_dataset = _load_eval_dataset(dataset_name, num_eval, seed)
     return train_dataset, eval_dataset, test_dataset
 
 # step 1
