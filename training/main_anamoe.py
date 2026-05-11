@@ -54,7 +54,7 @@ class TeeLogger:
             pass
 
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, ConcatDataset
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, ConcatDataset, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (
@@ -109,6 +109,21 @@ from params import Method2Class, AllDatasetName, AllDatasetNameExecutable
 #     pass
 
 # TODO, check support for OPT and llama
+
+class IndexedDataset(Dataset):
+    """Attach original row indices so distributed eval results can be reassembled."""
+
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        item = dict(self.dataset[idx])
+        item["__index__"] = idx
+        return item
+
 
 def parse_args():
     def list_of_strings(arg):
@@ -555,6 +570,8 @@ def main():
             train_dataset, eval_dataset, test_dataset = create_executable_dataset(dataset, args.seed, int(args.num_train[i]), int(args.num_eval[i]), int(args.num_test[i]))
         print_rank_0(f"Dataset {dataset}: train size = {len(train_dataset)}, eval size = {len(eval_dataset)}, test size = {len(test_dataset)}")
         train_datasets.append(train_dataset)
+        eval_dataset = IndexedDataset(eval_dataset)
+        test_dataset = IndexedDataset(test_dataset)
 
         # DataLoaders creation:
         if args.local_rank == -1:
@@ -564,8 +581,8 @@ def main():
 
         else:
             train_sampler = DistributedSampler(train_dataset)
-            eval_sampler = DistributedSampler(eval_dataset)
-            test_sampler = DistributedSampler(test_dataset)
+            eval_sampler = DistributedSampler(eval_dataset, shuffle=False)
+            test_sampler = DistributedSampler(test_dataset, shuffle=False)
 
         data_collator = DataCollator(
             tokenizer,
