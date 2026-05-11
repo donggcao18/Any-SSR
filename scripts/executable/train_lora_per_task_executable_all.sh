@@ -9,9 +9,8 @@ port=$(shuf -i25000-30000 -n1)
 
 # Executable benchmark tasks: python, cpp, swift, rust, csharp, java, php, typescript, shell
 # Using max_prompt_len=1024 and max_new_tokens=2048 for all tasks.
-# for dataset in python cpp swift rust csharp java php typescript shell; do
 
-for dataset in swift rust; do
+for dataset in python cpp swift rust csharp java php typescript shell; do
   deepspeed --master_port "$port" training/main_anamoe.py \
     --model_name_or_path Qwen/Qwen2.5-Coder-1.5B \
     --benchmark executable \
