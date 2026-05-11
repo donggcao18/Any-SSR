@@ -188,18 +188,20 @@ class L2P(CL_Base_Model):
                 split_name=f"eval-epoch{epoch+1}",
             )
 
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank,
-        )
-        self.evaluate_one_task(
-            round=i_task,
-            infer_task_id=i_task,
-            task=task,
-            infer_dataloader=self.test_task_list[task],
-            save_results=True,
-            split_name="test-after-task",
-        )
+        split_name = f"test-after-task-{i_task}"
+        for seen_idx, (seen_task, test_dataloader) in enumerate(list(self.test_task_list.items())[:i_task + 1]):
+            print_rank_0(
+                f"***** Testing on seen task {seen_task} after training task {task} *****",
+                self.args.global_rank,
+            )
+            self.evaluate_one_task(
+                round=i_task,
+                infer_task_id=seen_idx,
+                task=seen_task,
+                infer_dataloader=test_dataloader,
+                save_results=True,
+                split_name=split_name,
+            )
 
     def test_all_tasks_and_save_predictions(self):
         self.args.output_dir = './L2P_final_results'

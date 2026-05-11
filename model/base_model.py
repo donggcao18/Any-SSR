@@ -183,6 +183,26 @@ class CL_Base_Model:
             json.dump({"metrics": metrics, "predictions": prediction_rows}, f, ensure_ascii=False, indent=2)
         print_rank_0(f"Saved {split_name} predictions to {pred_file}", self.args.global_rank)
 
+    def evaluate_seen_tasks_after_training(self, trained_task, trained_task_idx, device):
+        split_name = f"test-after-task-{trained_task_idx}"
+        for seen_idx, (seen_task, test_dataloader) in enumerate(list(self.test_task_list.items())[:trained_task_idx + 1]):
+            print_rank_0(
+                f"***** Testing on seen task {seen_task} after training task {trained_task} *****",
+                self.args.global_rank,
+            )
+            test_result, test_predictions = self.task_generation_evaluation(
+                seen_task,
+                test_dataloader,
+                device,
+                max_ans_len=self._resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+            )
+            print_rank_0(
+                f"[seen-task={seen_task} after-task={trained_task}] test result: {test_result}",
+                self.args.global_rank,
+            )
+            self._save_generation_predictions(split_name, seen_idx, seen_task, test_result, test_predictions)
+
     def test_all_tasks_and_save_predictions(self):
         if self.args.local_rank == -1:
             device = torch.device("cuda")
@@ -256,7 +276,6 @@ class CL_Base_Model:
         #### TRAIN ####
         train_dataloader = self.train_task_list[task]
         eval_dataloader = self.eval_task_list[task]
-        test_dataloader = self.test_task_list[task]
         total_steps = epochs * len(train_dataloader)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
         global_step = 0
@@ -301,19 +320,7 @@ class CL_Base_Model:
 
             self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
 
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank)
-        test_result, test_predictions = self.task_generation_evaluation(
-            task,
-            test_dataloader,
-            device,
-            max_ans_len=self._resolve_max_ans_len(i_task),
-            return_predictions=True,
-        )
-        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
-
-        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
+        self.evaluate_seen_tasks_after_training(task, i_task, device)
     
     
     def train_continual(self):
