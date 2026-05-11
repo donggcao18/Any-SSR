@@ -35,6 +35,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --group_name OLoRA_Qwen2.5-Coder-1.5B_executable \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \
   --max_ans_len 2048,2048,2048,2048,2048,2048,2048,2048,2048 \
+  --num_train_epochs 3
 
 : "${HF_MODEL_REPO_ID:=ankhanhtran02/OLoRA_Qwen2.5-Coder-1.5B_executable}"
 

@@ -162,7 +162,7 @@ class L2P(CL_Base_Model):
             )
 
             self.model.train()
-            for step, batch in enumerate(tqdm(train_dataloader)):
+            for step, batch in enumerate(train_dataloader):
                 global_step += 1
                 del batch['sources']
                 batch = {k: batch[k].to(self.device) for k in batch}
