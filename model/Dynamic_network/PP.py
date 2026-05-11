@@ -601,19 +601,23 @@ class PP(CL_Base_Model):
                 curr_prompt = self._prompt_container().prompt
             else:
                 curr_prompt = None
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank)
-        test_result, test_predictions = self.task_generation_evaluation(
-            task,
-            self.test_task_list[task],
-            self.device,
-            max_ans_len=self._resolve_max_ans_len(task_num),
-            return_predictions=True,
-            prompt=curr_prompt
-        )
-        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
-        self._save_generation_predictions("test-after-task", task_num, task, test_result, test_predictions)
+        split_name = f"test-after-task-{task_num}"
+        for seen_idx, (seen_task, test_dataloader) in enumerate(list(self.test_task_list.items())[:task_num + 1]):
+            print_rank_0(
+                f"***** Testing on seen task {seen_task} after training task {task} *****",
+                self.args.global_rank)
+            test_result, test_predictions = self.task_generation_evaluation(
+                seen_task,
+                test_dataloader,
+                self.device,
+                max_ans_len=self._resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+                prompt=curr_prompt
+            )
+            print_rank_0(
+                f"[seen-task={seen_task} after-task={task}] test result: {test_result}",
+                self.args.global_rank)
+            self._save_generation_predictions(split_name, seen_idx, seen_task, test_result, test_predictions)
         # log_dict = {
         #     "task_id": task_num,
         # }
