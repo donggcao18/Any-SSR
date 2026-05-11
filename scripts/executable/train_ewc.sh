@@ -2,6 +2,7 @@
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
 export CUDA_VISIBLE_DEVICES=0
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # This script uses 1 GPU. Use a larger disk space (56GB) to save the model checkpoints (full model).
 
 set -euo pipefail

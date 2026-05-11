@@ -1,10 +1,6 @@
-from copy import deepcopy
-
 import torch
-from torch.autograd import Variable
 import torch.utils.data
 from tqdm.auto import tqdm
-from torch import nn
 from model.base_model import CL_Base_Model
 from utils.utils import print_rank_0
 
@@ -15,50 +11,83 @@ class EWC(CL_Base_Model):
         super().__init__(model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         self.device="cuda"
         self.lambda_ewc = lambda_ewc
-        self.params = {n: p for n, p in self.model.named_parameters() if p.requires_grad}
+        self.trainable_param_names = [
+            n for n, p in self.model.named_parameters() if p.requires_grad
+        ]
         self._previous_params = {}
-
-        for n, p in deepcopy(self.params).items():
-            self._previous_params[n] = p.data.cpu() # Previous task parameters
-        self.grads = {} # 存储节点名称与节点的grad
-        
         self.fisher = {}
+        self._hook_handles = []
+        self.task_num = 0
+        self.train_length = 1
+        self._backward_loss_scale = 1.0
+
+        self._update_previous_params()
         self.init_fisher()
-        del self.params
 
 
     
     def init_fisher(self):
-        for n, p in deepcopy(self.params).items():
-            if p.requires_grad==True:
-                p.data.zero_()  #所有参数置零
-                self.fisher[n] = p.data  #初始化零矩阵
+        for n, p in self.model.named_parameters():
+            if n in self.trainable_param_names:
+                self.fisher[n] = torch.zeros_like(
+                    p.detach(),
+                    device="cpu",
+                    dtype=torch.float32,
+                )
             
     #计算每个参数的Fisher信息矩阵的值：每个样本输入模型，每个参数计算梯度的平方和，除以总的样本数量
-    def _update_fisher(self):
-        for n, p in self.model.named_parameters():
-            if n in self.grads.keys():
-                self.fisher[n].data += self.grads[n].cuda().data ** 2 / self.train_length
+    def _update_fisher(self, name, grad):
+        if name not in self.fisher:
+            return
+        with torch.no_grad():
+            grad = torch.nan_to_num(grad.detach(), nan=0.0)
+            if self._backward_loss_scale != 1.0:
+                grad = grad / self._backward_loss_scale
+            grad = grad.to(device="cpu", dtype=torch.float32)
+            self.fisher[name].add_(grad.square(), alpha=1.0 / max(1, self.train_length))
+
     #正则化，除以训练集长度
     def _regular_fisher(self):
-        for n, p in self.model.named_parameters():
-            if n in self.grads.keys():
-                self.fisher[n].data /= self.train_length
+        for n in self.fisher:
+            self.fisher[n].div_(self.train_length)
 
     
     def _update_previous_params(self):
         for n, p in self.model.named_parameters():
-            self._previous_params[n] = p.data.cpu() # Previous task parameters
+            if n in self.trainable_param_names:
+                self._previous_params[n] = p.detach().cpu().clone() # Previous task parameters
 
     #计算惩罚loss
     def penalty(self):
-        restrict_loss = 0
-        precision_matrices = self.fisher
-        for n, p in self.model.named_parameters():
-            if p.requires_grad==True:
-                restrict_loss_params = precision_matrices[n] * (p - self._previous_params[n].cuda()) ** 2
-                restrict_loss += restrict_loss_params.sum()
+        restrict_loss = torch.zeros((), device=self.device)
+        with torch.no_grad():
+            for n, p in self.model.named_parameters():
+                if n in self.fisher:
+                    previous = self._previous_params[n].to(
+                        device=p.device,
+                        dtype=p.dtype,
+                        non_blocking=True,
+                    )
+                    fisher = self.fisher[n].to(
+                        device=p.device,
+                        dtype=p.dtype,
+                        non_blocking=True,
+                    )
+                    restrict_loss += (fisher * (p.detach() - previous).square()).sum()
         return restrict_loss
+
+    def _get_loss_scale(self):
+        optimizer = getattr(self.model, "optimizer", None)
+        loss_scaler = getattr(optimizer, "loss_scaler", None)
+        for obj in (loss_scaler, optimizer):
+            for attr in ("cur_scale", "loss_scale"):
+                value = getattr(obj, attr, None)
+                if value is not None:
+                    try:
+                        return float(value)
+                    except TypeError:
+                        return float(value.item())
+        return 1.0
     
     def train_step(self,
                     batch):
@@ -73,23 +102,39 @@ class EWC(CL_Base_Model):
         outputs = self.model(input_ids=batch['input_ids'], labels=lm_labels, attention_mask=batch['attention_mask'],use_cache=False)
         
         loss = outputs[0]
-        if self.task_num!=0:
-            restrict_loss = self.penalty()
-            loss += 0.5*self.lambda_ewc*restrict_loss
 
         return loss
     
-    def save_grad(self,name):
+    def save_grad(self, name, param):
         def hook(grad):
-            grad = torch.nan_to_num(grad, nan=0)
-            # grad = torch.clamp(grad, -self.args.ds_config['gradient_clipping'], self.args.ds_config['gradient_clipping'])
-            self.grads[name] = grad.cpu()
-            del grad
+            clean_grad = torch.nan_to_num(grad, nan=0.0)
+            adjusted_grad = clean_grad
+
+            if self.task_num != 0 and name in self.fisher:
+                previous = self._previous_params[name].to(
+                    device=grad.device,
+                    dtype=grad.dtype,
+                    non_blocking=True,
+                )
+                fisher = self.fisher[name].to(
+                    device=grad.device,
+                    dtype=grad.dtype,
+                    non_blocking=True,
+                )
+                ewc_grad = param.detach().to(dtype=grad.dtype) - previous
+                ewc_grad.mul_(fisher)
+                if self._backward_loss_scale != 1.0:
+                    ewc_grad.mul_(self._backward_loss_scale)
+                adjusted_grad.add_(ewc_grad, alpha=self.lambda_ewc)
+
+            self._update_fisher(name, clean_grad)
+            return adjusted_grad
         return hook
+
     def retain_grad(self):
         for n,p in self.model.named_parameters():
             if n in self.fisher.keys():
-                p.register_hook(self.save_grad(n))
+                self._hook_handles.append(p.register_hook(self.save_grad(n, p)))
     
     
     def train_one_task(self,
@@ -123,9 +168,9 @@ class EWC(CL_Base_Model):
                     progress_bar.set_description(description, refresh=False)
                     if global_step % self.args.logging_steps == 0:
                         print_rank_0(f"task={task} epoch={epoch+1} step={global_step} loss={loss.item():.6f}", self.args.global_rank)
+                self._backward_loss_scale = self._get_loss_scale()
                 self.model.backward(loss)
                 self.model.step()
-                self._update_fisher()
 
             # Validate on eval split after each epoch.
             print_rank_0(
@@ -173,5 +218,3 @@ class EWC(CL_Base_Model):
         self.test_all_tasks_and_save_predictions()
             
             
-
-
