@@ -153,6 +153,7 @@ class L2P(CL_Base_Model):
         train_dataloader = self.train_task_list[task]
         total_steps = epochs * len(train_dataloader)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
+        global_step = 0
 
         for epoch in range(epochs):
             print_rank_0(
@@ -162,6 +163,7 @@ class L2P(CL_Base_Model):
 
             self.model.train()
             for step, batch in enumerate(tqdm(train_dataloader)):
+                global_step += 1
                 del batch['sources']
                 batch = {k: batch[k].to(self.device) for k in batch}
                 loss = self.train_step(batch)
@@ -170,6 +172,9 @@ class L2P(CL_Base_Model):
                     progress_bar.update(1)
                     description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
                     progress_bar.set_description(description, refresh=False)
+                    logging_steps = self.args.logging_steps
+                    if global_step % logging_steps == 0:
+                        print_rank_0(f"task={task} epoch={epoch+1} step={global_step} loss={loss.item():.6f}", self.args.global_rank)
 
                 self.model.backward(loss, retain_graph=True)
                 self.model.step()
@@ -257,14 +262,14 @@ class L2P(CL_Base_Model):
                 sources_sequences += batch.get('sources', [])
                 if 'gts' in batch:
                     label_sequences += batch['gts']
-                    ground_truths_ids = self.tokenizer(
-                        batch['gts'],
-                        truncation=True,
-                        max_length=int(self.args.max_ans_len[infer_task_id]),
-                        add_special_tokens=False,
-                        padding='max_length',
-                        return_tensors='pt',
-                    )['input_ids'].to(device)
+                    # ground_truths_ids = self.tokenizer(
+                    #     batch['gts'],
+                    #     truncation=True,
+                    #     max_length=int(self.args.max_ans_len[infer_task_id]),
+                    #     add_special_tokens=False,
+                    #     padding='max_length',
+                    #     return_tensors='pt',
+                    # )['input_ids'].to(device)
                     del batch['gts']
                 elif 'labels' in batch:
                     label_tensor = batch['labels']
@@ -277,11 +282,11 @@ class L2P(CL_Base_Model):
                                 clean_up_tokenization_spaces=False,
                             )
                         )
-                    ground_truths_ids = batch['labels']
+                    # ground_truths_ids = batch['labels']
                     del batch['labels']
                 else:
                     label_sequences += [''] * len(batch.get('sources', []))
-                    ground_truths_ids = torch.empty(0, dtype=torch.long, device=device)
+                    # ground_truths_ids = torch.empty(0, dtype=torch.long, device=device)
 
                 del batch['sources']
                 batch = to_device(batch, device)
@@ -390,14 +395,17 @@ class L2P(CL_Base_Model):
                 print_rank_0(f"Prediction: {pred}", self.args.global_rank)
                 print_rank_0("-----", self.args.global_rank)
 
-            evaluation_result = self._task_eval_from_predictions(
-                task,
-                sources_sequences=sources_sequences,
-                predicted_sequences=predicted_sequences,
-                ground_truths=ground_truths,
-            )
-            print_rank_0(f"***** Evaluation results on task {task} *****", self.args.global_rank)
-            print_rank_0(evaluation_result, self.args.global_rank)
+            if self.args.benchmark == 'non-executable':
+                evaluation_result = self._task_eval_from_predictions(
+                    task,
+                    sources_sequences=sources_sequences,
+                    predicted_sequences=predicted_sequences,
+                    ground_truths=ground_truths,
+                )
+                print_rank_0(f"***** Evaluation results on task {task} *****", self.args.global_rank)
+                print_rank_0(evaluation_result, self.args.global_rank)
+            else:
+                evaluation_result = {}
 
             if save_results:
                 print_rank_0("***** Saving inference results *****", self.args.global_rank)
