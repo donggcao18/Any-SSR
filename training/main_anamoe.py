@@ -552,6 +552,7 @@ def main():
             train_dataset, eval_dataset, test_dataset = create_codetask_dataset(dataset, args.seed, args.num_train[i], args.num_eval[i], args.num_test[i])
         else:
             train_dataset, eval_dataset, test_dataset = create_executable_dataset(dataset, args.seed, int(args.num_train[i]), int(args.num_eval[i]), int(args.num_test[i]))
+        print_rank_0(f"Dataset {dataset}: train size = {len(train_dataset)}, eval size = {len(eval_dataset)}, test size = {len(test_dataset)}")
 
         # DataLoaders creation:
         if args.local_rank == -1:
