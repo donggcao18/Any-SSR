@@ -19,8 +19,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --deepspeed \
   --print_loss \
   --learning_rate 1e-4 \
-  --CL_method O-LoRA \
-  --output_dir ./output_models/OLoRA_Qwen2.5-Coder-1.5B_executable \
+  --CL_method MTL \
+  --output_dir ./output_models/MTL_Qwen2.5-Coder-1.5B_executable \
   --per_device_train_batch_size 2 \
   --per_device_eval_batch_size 8 \
   --gradient_accumulation_steps 8 \
@@ -32,14 +32,14 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --num_eval 3 \
   --num_test -1 \
   --run_name run_1 \
-  --group_name OLoRA_Qwen2.5-Coder-1.5B_executable \
+  --group_name MTL_Qwen2.5-Coder-1.5B_executable \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \
   --max_ans_len 2048,2048,2048,2048,2048,2048,2048,2048,2048 \
   --num_train_epochs 3
 
-: "${HF_MODEL_REPO_ID:=ankhanhtran02/OLoRA_Qwen2.5-Coder-1.5B_executable}"
+: "${HF_MODEL_REPO_ID:=ankhanhtran02/MTL_Qwen2.5-Coder-1.5B_executable}"
 
 python upload_output_to_hf.py \
-  --output-dir "./output_models/OLoRA_Qwen2.5-Coder-1.5B_executable" \
+  --output-dir "./output_models/MTL_Qwen2.5-Coder-1.5B_executable" \
   --repo-id "$HF_MODEL_REPO_ID" \
-  --commit-message "Upload OLoRA executable outputs"
+  --commit-message "Upload MTL executable outputs"

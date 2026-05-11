@@ -54,7 +54,7 @@ class TeeLogger:
             pass
 
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (
@@ -466,7 +466,7 @@ def main():
             if name.find("lora") != -1:
                 param.requires_grad = True
 
-    if args.CL_method == "lora":
+    if args.CL_method in ["lora", "SeqLoRA"]:
         from peft import get_peft_model, LoraConfig, TaskType
         
         peft_config = LoraConfig(
@@ -516,6 +516,7 @@ def main():
     train_task_list = {}
     eval_task_list = {}
     test_task_list = {}
+    train_datasets = []
 
 
     if args.dataset_name[0] == "all":
@@ -553,6 +554,7 @@ def main():
         else:
             train_dataset, eval_dataset, test_dataset = create_executable_dataset(dataset, args.seed, int(args.num_train[i]), int(args.num_eval[i]), int(args.num_test[i]))
         print_rank_0(f"Dataset {dataset}: train size = {len(train_dataset)}, eval size = {len(eval_dataset)}, test size = {len(test_dataset)}")
+        train_datasets.append(train_dataset)
 
         # DataLoaders creation:
         if args.local_rank == -1:
@@ -599,6 +601,34 @@ def main():
         train_task_list[dataset] = train_dataloader
         eval_task_list[dataset] = eval_dataloader
         test_task_list[dataset] = test_dataloader
+
+    if args.CL_method == "MTL":
+        mtl_train_dataset = ConcatDataset(train_datasets)
+        if args.local_rank == -1:
+            mtl_train_sampler = RandomSampler(mtl_train_dataset)
+        else:
+            mtl_train_sampler = DistributedSampler(mtl_train_dataset, shuffle=True)
+
+        mtl_data_collator = DataCollator(
+            tokenizer,
+            padding="longest",
+            max_prompt_len=max(int(x) for x in args.max_prompt_len),
+            max_ans_len=max(int(x) for x in args.max_ans_len),
+            pad_to_multiple_of=8,
+            inference=False
+        )
+        train_task_list = {
+            "MTL": DataLoader(
+                mtl_train_dataset,
+                collate_fn=mtl_data_collator,
+                sampler=mtl_train_sampler,
+                batch_size=args.per_device_train_batch_size
+            )
+        }
+        print_rank_0(
+            f"MTL mixed train dataset size = {len(mtl_train_dataset)}; sampler = {mtl_train_sampler.__class__.__name__}",
+            args.global_rank
+        )
 
 
     def evaluation(model, eval_dataloader):

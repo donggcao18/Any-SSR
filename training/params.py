@@ -9,6 +9,7 @@ from model.Replay.LFPT5 import LFPT5
 from model.Regular.O_LoRA import O_LoRA
 from model.base_model import CL_Base_Model
 from model.lora import lora
+from model.mtl import MTL
 
 
 
@@ -24,7 +25,9 @@ Method2Class = {
                 "O-LoRA":O_LoRA,
                 "base":CL_Base_Model,
                 "lora":lora,
-                "anamoe":lora
+                "anamoe":lora,
+                "SeqLoRA":lora,
+                "MTL":MTL
                 }
 
 AllDatasetName = ["CONCODE",

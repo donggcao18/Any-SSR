@@ -36,7 +36,7 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --run_name "anamoe_${dataset}" \
     --group_name "anamoe_executable_all" \
     --num_train -1 \
-    --num_eval 10 \
+    --num_eval 3 \
     --num_test -1 \
     --logging_steps 10 \
     --start_layer 0 \

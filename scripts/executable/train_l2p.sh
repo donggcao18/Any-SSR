@@ -28,7 +28,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --run_name run_1 \
   --group_name L2P_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
   --num_train -1 \
-  --num_eval 2 \
+  --num_eval 3 \
   --num_test -1 \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \
   --max_ans_len 2048,2048,2048,2048,2048,2048,2048,2048,2048 \
