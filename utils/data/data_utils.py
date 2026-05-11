@@ -311,7 +311,7 @@ def _hf_token() -> str | None:
     return os.environ.get("HF_TOKEN")
 
 def _load_split(repo_id: str, split: str) -> Dataset:
-    return load_dataset(repo_id, split=split, token=_hf_token())
+    return load_dataset(repo_id, split=split, token=_hf_token(), download_mode="force_redownload")
 
 
 def _limit_dataset(dataset: Dataset, max_samples: int=-1, seed: int=0) -> Dataset:

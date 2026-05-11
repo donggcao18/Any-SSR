@@ -283,10 +283,10 @@ def parse_args():
                         type=float,
                         default=0.1,
                         help='LoRA dropout')
-    # parser.add_argument('--lora_target_modules',
-    #                     type=list_of_strings,
-    #                     default="q_proj,v_proj",
-    #                     help='LoRA target modules')
+    parser.add_argument('--lora_target_modules',
+                        type=list_of_strings,
+                        default="q_proj,v_proj",
+                        help='LoRA target modules')
     # added by wangxiao
     parser.add_argument('--CL_method',
                 default=None,
@@ -470,7 +470,7 @@ def main():
         from peft import get_peft_model, LoraConfig, TaskType
         
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout, target_modules=args.lora_target_modules
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():
