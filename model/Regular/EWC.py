@@ -104,13 +104,14 @@ class EWC(CL_Base_Model):
         self.train_length = len(dataloader_train)
         total_steps = epochs * len(dataloader_train)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
-
+        global_step = 0
 
         for epoch in range(epochs):
             print_rank_0(f'Epoch {epoch+1}/{epochs}', self.args.global_rank)
             self.model.train()
 
             for step, batch in enumerate(dataloader_train):
+                global_step += 1
                 del batch['sources']
                 batch = {k:batch[k].to('cuda') for k in batch}
                 loss = self.train_step(batch)
@@ -120,6 +121,8 @@ class EWC(CL_Base_Model):
                     progress_bar.update(1)
                     description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
                     progress_bar.set_description(description, refresh=False)
+                    if global_step % logging_steps == 0:
+                        print_rank_0(f"task={task} epoch={epoch+1} step={global_step} loss={loss.item():.6f}", self.args.global_rank)
                 self.model.backward(loss)
                 self.model.step()
                 self._update_fisher()
