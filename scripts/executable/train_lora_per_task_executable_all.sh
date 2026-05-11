@@ -32,7 +32,6 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --CL_method anamoe \
     --repetition_penalty 1 \
     --do_sample \
-    --disable_epoch_eval \
     --output_dir "./output_models/lora_per_task_executable_start_0/${dataset}" \
     --run_name "anamoe_${dataset}" \
     --group_name "anamoe_executable_all" \
