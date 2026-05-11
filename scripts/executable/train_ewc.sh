@@ -27,19 +27,19 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --gradient_accumulation_steps 32 \
   --max_prompt_len 1024 \
   --max_ans_len 2048 \
-  --num_train_epochs 1 \
+  --num_train_epochs 3 \
   --run_name "run_1" \
   --group_name "EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable" \
-  --num_train 100 \
-  --num_eval 2 \
-  --num_test 2 \
+  --num_train -1 \
+  --num_eval 3 \
+  --num_test -1 \
   --logging_steps 10 \
   --temperature 0.2 \
   --top_p 0.95 \
   --repetition_penalty 1 \
   --do_sample 
 
-: "${HF_MODEL_REPO_ID:=ankhanhtran02/lora-per-task-executable-start-0}"
+: "${HF_MODEL_REPO_ID:=ankhanhtran02/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable}"
 
 python upload_output_to_hf.py \
   --output-dir "./output_models/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable" \
