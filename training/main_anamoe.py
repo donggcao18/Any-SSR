@@ -532,11 +532,18 @@ def main():
         args.num_eval = [args.num_eval[0]] * len(Datasets)
     if len(args.num_test) == 1:
         args.num_test = [args.num_test[0]] * len(Datasets)
+    if len(args.num_train_epochs) == 1:
+        args.num_train_epochs = [args.num_train_epochs[0]] * len(Datasets)
+    if len(args.max_prompt_len) == 1:
+        args.max_prompt_len = [args.max_prompt_len[0]] * len(Datasets)
+    if len(args.max_ans_len) == 1:
+        args.max_ans_len = [args.max_ans_len[0]] * len(Datasets)
     assert len(args.num_train) == len(Datasets), "The number of training examples should be specified for each dataset"
     assert len(args.num_eval) == len(Datasets), "The number of evaluation examples should be specified for each dataset"
     assert len(args.num_test) == len(Datasets), "The number of test examples should be specified for each dataset"
     assert len(args.max_prompt_len) == len(Datasets), "The max prompt length should be specified for each dataset"
     assert len(args.max_ans_len) == len(Datasets), "The max answer length should be specified for each dataset"
+    assert len(args.num_train_epochs) == len(Datasets), "The number of training epochs should be specified for each dataset"
     
     for i, dataset in enumerate(Datasets):
         # dataset_path = os.path.join(args.data_path,dataset)
