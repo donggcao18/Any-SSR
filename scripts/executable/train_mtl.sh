@@ -2,6 +2,7 @@
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
 export CUDA_VISIBLE_DEVICES=0,1
+# This scripts uses 2 GPUs, each with 48GB memory. You can adjust the batch size and gradient accumulation steps according to your GPU memory.
 
 set -euo pipefail
 
@@ -21,21 +22,21 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method MTL \
   --output_dir ./output_models/MTL_Qwen2.5-Coder-1.5B_executable \
-  --per_device_train_batch_size 1 \
+  --per_device_train_batch_size 2 \
   --per_device_eval_batch_size 8 \
-  --gradient_accumulation_steps 16 \
+  --gradient_accumulation_steps 8 \
   --temperature 0.2 \
   --top_p 0.95 \
   --repetition_penalty 1 \
   --do_sample \
-  --num_train 100 \
-  --num_eval 2 \
-  --num_test 1 \
+  --num_train -1 \
+  --num_eval 3 \
+  --num_test -1 \
   --run_name run_1 \
   --group_name MTL_Qwen2.5-Coder-1.5B_executable \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \
   --max_ans_len 2048,2048,2048,2048,2048,2048,2048,2048,2048 \
-  --num_train_epochs 2
+  --num_train_epochs 3
 
 : "${HF_MODEL_REPO_ID:=ankhanhtran02/MTL_Qwen2.5-Coder-1.5B_executable}"
 

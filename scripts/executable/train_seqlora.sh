@@ -29,7 +29,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --repetition_penalty 1 \
   --do_sample \
   --num_train -1 \
-  --num_eval 2 \
+  --num_eval 3 \
   --num_test -1 \
   --run_name run_1 \
   --group_name SeqLoRA_Qwen2.5-Coder-1.5B_executable \
