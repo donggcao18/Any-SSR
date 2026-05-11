@@ -22,17 +22,17 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method EWC \
   --output_dir ./output_models/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
-  --per_device_train_batch_size 2 \
+  --per_device_train_batch_size 1 \
   --per_device_eval_batch_size 16 \
-  --gradient_accumulation_steps 16 \
+  --gradient_accumulation_steps 32 \
   --max_prompt_len 1024 \
   --max_ans_len 2048 \
-  --num_train_epochs 2 \
+  --num_train_epochs 1 \
   --run_name "run_1" \
   --group_name "EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable" \
   --num_train 100 \
-  --num_eval 3 \
-  --num_test 5 \
+  --num_eval 2 \
+  --num_test 2 \
   --logging_steps 10 \
   --temperature 0.2 \
   --top_p 0.95 \

@@ -121,7 +121,7 @@ class EWC(CL_Base_Model):
                     progress_bar.update(1)
                     description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
                     progress_bar.set_description(description, refresh=False)
-                    if global_step % logging_steps == 0:
+                    if global_step % self.args.logging_steps == 0:
                         print_rank_0(f"task={task} epoch={epoch+1} step={global_step} loss={loss.item():.6f}", self.args.global_rank)
                 self.model.backward(loss)
                 self.model.step()
