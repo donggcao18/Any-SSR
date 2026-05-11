@@ -256,6 +256,7 @@ class L2P(CL_Base_Model):
             predicted_sequences = []
             sources_sequences = []
             label_sequences = []
+            sample_indices = []
             model.eval()
 
             is_executable = getattr(self.args, "benchmark", "non-executable") != "non-executable"
@@ -273,6 +274,13 @@ class L2P(CL_Base_Model):
                 inference_generation_config = generation_config
 
             for step, batch in enumerate(infer_dataloader):
+                batch_indices = batch.pop('indices', None)
+                if batch_indices is not None:
+                    if torch.is_tensor(batch_indices):
+                        sample_indices.extend(batch_indices.detach().cpu().tolist())
+                    else:
+                        sample_indices.extend([int(index) for index in batch_indices])
+
                 sources_sequences += batch.get('sources', [])
                 if 'gts' in batch:
                     label_sequences += batch['gts']
@@ -386,25 +394,33 @@ class L2P(CL_Base_Model):
                 else:
                     predicted_sequences += pre_sequences
 
-            return sources_sequences, predicted_sequences, label_sequences
-
-
-        def save_inference_results(evaluation_result: dict, sources_sequences: list, predicted_sequences: list,
-                                   ground_truths: list, round: int, i_task: int, task: str):
             prediction_rows = [
                 {
                     "source": source,
                     "ground-truth": gt,
                     "prediction": pred,
                 }
-                for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
+                for source, gt, pred in zip(sources_sequences, label_sequences, predicted_sequences)
             ]
+            if len(sample_indices) == len(prediction_rows):
+                for row, index in zip(prediction_rows, sample_indices):
+                    row["__index__"] = index
+
+            prediction_rows = self._gather_prediction_rows(prediction_rows)
+            sources_sequences = [row["source"] for row in prediction_rows]
+            predicted_sequences = [row["prediction"] for row in prediction_rows]
+            label_sequences = [row["ground-truth"] for row in prediction_rows]
+
+            return sources_sequences, predicted_sequences, label_sequences, prediction_rows
+
+
+        def save_inference_results(evaluation_result: dict, prediction_rows: list, i_task: int, task: str):
             self._save_generation_predictions(split_name, i_task, task, evaluation_result, prediction_rows)
 
 
         # Inference !
         print_rank_0("***** Start inference *****", self.args.global_rank)
-        sources_sequences, predicted_sequences, ground_truths = prediction(self.model, infer_dataloader)
+        sources_sequences, predicted_sequences, ground_truths, prediction_rows = prediction(self.model, infer_dataloader)
 
         # Get Accuracy/ROUGE/BLEU/CodeBLEU/...
         # Prefer the shared evaluator in `CL_Base_Model` (handles CodeBLEU/SmoothBLEU/etc. for code tasks).
@@ -430,4 +446,4 @@ class L2P(CL_Base_Model):
 
             if save_results:
                 print_rank_0("***** Saving inference results *****", self.args.global_rank)
-                save_inference_results(evaluation_result, sources_sequences, predicted_sequences, ground_truths, round, infer_task_id, task)
+                save_inference_results(evaluation_result, prediction_rows, infer_task_id, task)
