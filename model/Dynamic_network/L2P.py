@@ -258,6 +258,20 @@ class L2P(CL_Base_Model):
             label_sequences = []
             model.eval()
 
+            is_executable = getattr(self.args, "benchmark", "non-executable") != "non-executable"
+            if is_executable:
+                num_return_sequences = int(getattr(self.args, "num_return_sequences", 1))
+                generation_top_k = int(getattr(self.args, "top_k", 0))
+                generation_kwargs = self.generation_config.to_dict()
+                generation_kwargs.update({
+                    "num_return_sequences": num_return_sequences,
+                    "top_k": generation_top_k,
+                })
+                inference_generation_config = GenerationConfig(**generation_kwargs)
+            else:
+                num_return_sequences = 1
+                inference_generation_config = generation_config
+
             for step, batch in enumerate(infer_dataloader):
                 sources_sequences += batch.get('sources', [])
                 if 'gts' in batch:
@@ -354,7 +368,7 @@ class L2P(CL_Base_Model):
                                                   bos_token_id=self.tokenizer.bos_token_id,
                                                   eos_token_id=self.tokenizer.eos_token_id,
                                                   pad_token_id=self.tokenizer.unk_token_id,
-                                                  generation_config=generation_config,
+                                                  generation_config=inference_generation_config,
                                                 use_cache=False
 
                                                   )
@@ -363,7 +377,14 @@ class L2P(CL_Base_Model):
                     skip_special_tokens=True,
                     clean_up_tokenization_spaces=False,
                 )
-                predicted_sequences += pre_sequences
+                if is_executable and num_return_sequences > 1:
+                    batch_preds = [
+                        pre_sequences[i:i + num_return_sequences]
+                        for i in range(0, len(pre_sequences), num_return_sequences)
+                    ]
+                    predicted_sequences.extend(batch_preds)
+                else:
+                    predicted_sequences += pre_sequences
 
             return sources_sequences, predicted_sequences, label_sequences
 
