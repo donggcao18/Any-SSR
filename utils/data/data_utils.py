@@ -361,8 +361,9 @@ def _load_eval_dataset(language, max_eval_samples, seed=0) -> Dataset:
 
 def create_executable_dataset(dataset_name, seed, num_train, num_eval, num_test):
     train_dataset = _load_training_dataset(dataset_name, num_train, seed)
+    eval_dataset = _load_eval_dataset(dataset_name, num_eval, seed)
     test_dataset = _load_eval_dataset(dataset_name, num_test, seed)
-    return train_dataset, test_dataset, test_dataset
+    return train_dataset, eval_dataset, test_dataset
 
 # step 1
 def create_prompt_dataset(local_rank,

@@ -409,7 +409,7 @@ class L2P(CL_Base_Model):
         # Get Accuracy/ROUGE/BLEU/CodeBLEU/...
         # Prefer the shared evaluator in `CL_Base_Model` (handles CodeBLEU/SmoothBLEU/etc. for code tasks).
         if self.args.global_rank <= 0:
-            for source, gt, pred in list(zip(sources_sequences, ground_truths, predicted_sequences))[:3]:
+            for source, gt, pred in list(zip(sources_sequences, ground_truths, predicted_sequences))[:1]:
                 print_rank_0("***** Sample inference results *****", self.args.global_rank)
                 print_rank_0(f"Source: {source}", self.args.global_rank)
                 print_rank_0(f"Ground Truth: {gt}", self.args.global_rank)
