@@ -82,9 +82,6 @@ class CL_Base_Model:
         ]
 
     def _gather_prediction_rows(self, prediction_rows):
-        if not prediction_rows or not all("__index__" in row for row in prediction_rows):
-            return prediction_rows
-
         if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
             gathered_rows = [None for _ in range(dist.get_world_size())]
             dist.all_gather_object(gathered_rows, prediction_rows)
@@ -94,7 +91,22 @@ class CL_Base_Model:
                 for row in rank_rows
             ]
 
-        return self._ordered_unique_prediction_rows(prediction_rows)
+        if not prediction_rows:
+            return prediction_rows
+
+        if all("__index__" in row for row in prediction_rows):
+            return self._ordered_unique_prediction_rows(prediction_rows)
+
+        # No indices available: de-duplicate by row content while preserving order.
+        seen = set()
+        unique_rows = []
+        for row in prediction_rows:
+            key = (row.get("source"), row.get("ground-truth"), str(row.get("prediction")))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_rows.append(row)
+        return unique_rows
 
     def task_generation_evaluation(self, task, test_dataloader, device, max_ans_len=None, return_predictions=False):
         self.model.eval()

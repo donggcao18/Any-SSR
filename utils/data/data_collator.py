@@ -225,6 +225,8 @@ class DataCollator:
             gts.append(label)
             if "index" in instance:
                 indices.append(int(instance["index"]))
+            elif "__index__" in instance:
+                indices.append(int(instance["__index__"]))
 
             if not self.inference:
                 # Wrap instruction in input/output template to steer generation format.
