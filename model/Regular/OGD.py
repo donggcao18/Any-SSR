@@ -185,4 +185,3 @@ class OGD(CL_Base_Model):
             #     if j_task > i_task:
             #         break
             #     self.evaluate(i_task, j_task, _task)
-        self.test_all_tasks_and_save_predictions()
