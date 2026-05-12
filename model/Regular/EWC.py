@@ -139,7 +139,6 @@ class EWC(CL_Base_Model):
             
             self._update_previous_params()
             self.save_model(i_task)
-        self.test_all_tasks_and_save_predictions()
             
             
 

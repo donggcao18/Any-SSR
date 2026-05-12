@@ -286,7 +286,6 @@ class CL_Base_Model:
         for i_task, task in enumerate(self.train_task_list):
             self.train_one_task(task, i_task, int(self.args.num_train_epochs[i_task]))
             self.save_model(i_task)
-        self.test_all_tasks_and_save_predictions()
 
     
     def save_model(self, round):

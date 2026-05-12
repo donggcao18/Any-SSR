@@ -647,10 +647,6 @@ class PP(CL_Base_Model):
         #             json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
         #         print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
 
-        # TEST ON ALL TASKS FOR THE LAST TRAINED TASK
-        if last_task:
-            self.test_all_tasks_and_save_predictions(prompt=curr_prompt)
-
     def test_all_tasks_and_save_predictions(self, prompt):
         prediction_root = os.path.join(self.args.output_dir or ".", "predictions", f"final-{self.__class__.__name__}")
         if self.args.global_rank == 0:
