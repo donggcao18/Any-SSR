@@ -223,8 +223,8 @@ class DataCollator:
             label = instance['answer']
             sources.append(instruction)
             gts.append(label)
-            if "__index__" in instance:
-                indices.append(int(instance["__index__"]))
+            if "index" in instance:
+                indices.append(int(instance["index"]))
 
             if not self.inference:
                 # Wrap instruction in input/output template to steer generation format.
@@ -330,7 +330,6 @@ class DataCollator:
         model_inputs['sources'] = sources
         if self.inference:
             model_inputs['gts'] = gts
-            if len(indices) == len(batch):
-                model_inputs['indices'] = torch.tensor(indices, dtype=torch.long)
-
+        if indices:
+            model_inputs["indices"] = torch.tensor(indices)
         return model_inputs

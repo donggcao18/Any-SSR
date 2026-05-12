@@ -464,6 +464,7 @@ class PP(CL_Base_Model):
 
             for step, batch in enumerate(tqdm(dataloader_train)):
                 del batch['sources']
+                batch.pop('indices', None)
                 batch = {k:batch[k].to('cuda') for k in batch}
                 if self.prefix_len>0: # prompt tuning
                     loss = self.train_step_lester(batch,

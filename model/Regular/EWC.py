@@ -158,6 +158,7 @@ class EWC(CL_Base_Model):
             for step, batch in enumerate(dataloader_train):
                 global_step += 1
                 del batch['sources']
+                batch.pop('indices', None)
                 batch = {k:batch[k].to('cuda') for k in batch}
                 loss = self.train_step(batch)
                 

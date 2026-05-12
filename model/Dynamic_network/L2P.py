@@ -165,6 +165,7 @@ class L2P(CL_Base_Model):
             for step, batch in enumerate(train_dataloader):
                 global_step += 1
                 del batch['sources']
+                batch.pop('indices', None)
                 batch = {k: batch[k].to(self.device) for k in batch}
                 loss = self.train_step(batch)
 

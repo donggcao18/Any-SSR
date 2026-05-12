@@ -309,6 +309,7 @@ class CL_Base_Model:
             for step, batch in enumerate(train_dataloader):
                 global_step += 1
                 del batch['sources']
+                batch.pop('indices', None)
                 batch = to_device(batch, device)
                 outputs = self.model(**batch, use_cache=False)
                 loss = outputs.loss

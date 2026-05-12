@@ -93,6 +93,7 @@ class LwF(CL_Base_Model):
 
             for step, batch in enumerate(tqdm(dataloader_train)):
                 del batch['sources']
+                batch.pop('indices', None)
                 batch = {k: batch[k].to(self.device) for k in batch}
                 outputs = self.train_step(batch)
                 loss = outputs.loss
