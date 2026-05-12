@@ -82,6 +82,9 @@ class CL_Base_Model:
         ]
 
     def _gather_prediction_rows(self, prediction_rows):
+        if not prediction_rows or not all("__index__" in row for row in prediction_rows):
+            return prediction_rows
+
         if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
             gathered_rows = [None for _ in range(dist.get_world_size())]
             dist.all_gather_object(gathered_rows, prediction_rows)
