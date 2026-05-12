@@ -342,20 +342,20 @@ class CL_Base_Model:
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
                 self.model.step()
 
-            # Validate on eval split after each epoch.
-            print_rank_0(
-                f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
-                self.args.global_rank)
-            eval_result, eval_predictions = self.task_generation_evaluation(
-                task,
-                eval_dataloader,
-                device,
-                max_ans_len=self._resolve_max_ans_len(i_task),
-                return_predictions=True,
-            )
-            print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
+            # # Validate on eval split after each epoch.
+            # print_rank_0(
+            #     f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
+            #     self.args.global_rank)
+            # eval_result, eval_predictions = self.task_generation_evaluation(
+            #     task,
+            #     eval_dataloader,
+            #     device,
+            #     max_ans_len=self._resolve_max_ans_len(i_task),
+            #     return_predictions=True,
+            # )
+            # print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
 
-            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+            # self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
         
         for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:i_task+1]):
             print_rank_0(
@@ -377,7 +377,7 @@ class CL_Base_Model:
         for i_task, task in enumerate(self.train_task_list):
             self.train_one_task(task, i_task, int(self.args.num_train_epochs[i_task]))
             self.save_model(i_task)
-        self.test_all_tasks_and_save_predictions()
+        # self.test_all_tasks_and_save_predictions()
 
     
     def save_model(self, round):

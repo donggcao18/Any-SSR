@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=5,6,7
 
 set -euo pipefail
 
@@ -16,9 +16,9 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --benchmark executable \
     --data_path "" \
     --dataset_name "$dataset" \
-    --per_device_train_batch_size 2 \
-    --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 8 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 16 \
+    --gradient_accumulation_steps 11 \
     --max_prompt_len 1024 \
     --max_ans_len 2048 \
     --learning_rate 1e-4 \
