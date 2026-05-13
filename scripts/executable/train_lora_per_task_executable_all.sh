@@ -32,20 +32,20 @@ for dataset in python cpp swift rust csharp java php typescript shell; do
     --CL_method anamoe \
     --repetition_penalty 1 \
     --do_sample \
-    --output_dir "./output_models/lora_per_task_executable_start_0/${dataset}" \
+    --output_dir "./output_models/lora_per_task_executable_start_4/${dataset}" \
     --run_name "anamoe_${dataset}" \
     --group_name "anamoe_executable_all" \
     --num_train -1 \
     --num_eval 3 \
     --num_test -1 \
     --logging_steps 10 \
-    --start_layer 0 \
+    --start_layer 4 \
 
 done
 
-: "${HF_MODEL_REPO_ID:=ankhanhtran02/lora-per-task-executable-start-0}"
+: "${HF_MODEL_REPO_ID:=ankhanhtran02/lora-per-task-executable-start-4}"
 
 python upload_output_to_hf.py \
-  --output-dir "./output_models/lora_per_task_executable_start_0" \
+  --output-dir "./output_models/lora_per_task_executable_start_4" \
   --repo-id "$HF_MODEL_REPO_ID" \
   --commit-message "Upload LoRA per-task executable outputs"

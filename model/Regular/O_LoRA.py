@@ -111,18 +111,23 @@ class O_LoRA(CL_Base_Model):
             print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
             self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
 
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank)
-        test_result, test_predictions = self.task_generation_evaluation(
-            task,
-            test_dataloader,
-            self.device,
-            max_ans_len=int(self.args.max_ans_len[i_task]),
-            return_predictions=True,
-        )
-        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
-        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
+
+        #### TEST ####
+
+        for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:i_task+1]):
+            print_rank_0(
+                f"***** Testing on current task {test_task} after training {task} on all epochs *****",
+                self.args.global_rank)
+            test_result, test_predictions = self.task_generation_evaluation(
+                test_task,
+                test_dataset,
+                self.device,
+                max_ans_len=self._resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+            )
+            print_rank_0(f"[task={test_task}] post-train test result: {test_result}", self.args.global_rank)
+
+            self._save_generation_predictions("test-after-task", i_task, test_task, test_result, test_predictions)
 
         #### COMBINE lora with lora_new and INITIALIZE lora_new ####
         flag = 0
@@ -170,36 +175,6 @@ class O_LoRA(CL_Base_Model):
                 layer_id += 1
                 flag = 0
 
-        #### TEST ####
-        log_dict = {
-            "task_id": i_task,
-        }
-
-        trained_task_name = str(task).replace("/", "_").replace(":", "_")
-        prediction_dir = os.path.join(self.args.output_dir or ".", "predictions", f"{i_task}-{trained_task_name}")
-        if self.args.global_rank == 0:
-            os.makedirs(prediction_dir, exist_ok=True)
-
-        # for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[i_task:i_task+1]):
-        #     print_rank_0(f"***** Validating on {eval_task} after task training: {task} *****", self.args.global_rank)
-        #     test_result, prediction_rows = self.task_generation_evaluation(
-        #         eval_task,
-        #         eval_dataset,
-        #         self.device,
-        #         max_ans_len=int(self.args.max_ans_len[seen_idx]),
-        #         return_predictions=True,
-        #     )
-        #     print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
-        #     log_dict[f"eval_task/seen_task_{eval_task}/exact_match"] = test_result["exact_match"]
-        #     log_dict[f"eval_task/seen_task_{eval_task}/bleu"] = test_result["bleu"]
-        #     log_dict[f"eval_task/seen_task_{eval_task}/codebleu"] = test_result["codebleu"]
-
-        #     if self.args.global_rank == 0:
-        #         eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
-        #         prediction_file = os.path.join(prediction_dir, f"{seen_idx}_{eval_task_name}.json")
-        #         with open(prediction_file, "w", encoding="utf-8") as f:
-        #             json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
-        #         print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
 
 
         #### RESET ####

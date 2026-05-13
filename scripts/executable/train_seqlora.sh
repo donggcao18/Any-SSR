@@ -22,7 +22,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --CL_method SeqLoRA \
   --output_dir ./output_models/SeqLoRA_Qwen2.5-Coder-1.5B_executable \
   --per_device_train_batch_size 1 \
-  --per_device_eval_batch_size 16 \
+  --per_device_eval_batch_size 8 \
   --gradient_accumulation_steps 8 \
   --temperature 0.2 \
   --top_p 0.95 \
