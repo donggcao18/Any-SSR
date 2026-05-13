@@ -497,9 +497,9 @@ def main():
                 param.requires_grad = True
 
         if args.CL_method == "SeqLoRA" and args.start_task_id > 0:
-            adapter_path = os.path.join(args.output_dir, str(args.start_task_id))
+            adapter_path = os.path.join(args.output_dir, str(args.start_task_id-1))
             if os.path.isdir(adapter_path):
-                adapter_name = f"task_{args.start_task_id}"
+                adapter_name = f"task_{args.start_task_id-1}"
                 model.load_adapter(adapter_path, adapter_name=adapter_name, is_trainable=True)
                 model.set_adapter(adapter_name)
                 print_rank_0(

@@ -36,7 +36,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \
   --max_ans_len 2048,2048,2048,2048,2048,2048,2048,2048,2048 \
   --num_train_epochs 3 \
-  --start_task_id 
+  --start_task_id 3
 
 : "${HF_MODEL_REPO_ID:=ankhanhtran02/SeqLoRA_Qwen2.5-Coder-1.5B_executable}"
 
