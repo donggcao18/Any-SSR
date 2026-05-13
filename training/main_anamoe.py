@@ -346,6 +346,10 @@ def parse_args():
                     type=int,
                     default=4,
                     help='The start layer for Anamoe (inclusive).')
+    parser.add_argument('--start_task_id',
+                    type=int,
+                    default=0,
+                    help='Start training from this task id (for SeqLoRA resume).')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -491,6 +495,22 @@ def main():
         for name, param in model.named_parameters():
             if name.find("lora") != -1:
                 param.requires_grad = True
+
+        if args.CL_method == "SeqLoRA" and args.start_task_id > 0:
+            adapter_path = os.path.join(args.output_dir, str(args.start_task_id))
+            if os.path.isdir(adapter_path):
+                adapter_name = f"task_{args.start_task_id}"
+                model.load_adapter(adapter_path, adapter_name=adapter_name, is_trainable=True)
+                model.set_adapter(adapter_name)
+                print_rank_0(
+                    f"Loaded SeqLoRA adapter from {adapter_path} (adapter={adapter_name})",
+                    args.global_rank,
+                )
+            else:
+                print_rank_0(
+                    f"SeqLoRA resume requested but adapter path not found: {adapter_path}",
+                    args.global_rank,
+                )
 
     if args.CL_method == "anamoe":
         from peft import get_peft_model, LoraConfig, TaskType
