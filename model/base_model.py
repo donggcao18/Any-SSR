@@ -342,20 +342,20 @@ class CL_Base_Model:
                 # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
                 self.model.step()
 
-            # # Validate on eval split after each epoch.
-            # print_rank_0(
-            #     f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
-            #     self.args.global_rank)
-            # eval_result, eval_predictions = self.task_generation_evaluation(
-            #     task,
-            #     eval_dataloader,
-            #     device,
-            #     max_ans_len=self._resolve_max_ans_len(i_task),
-            #     return_predictions=True,
-            # )
-            # print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
+            # Validate on eval split after each epoch.
+            print_rank_0(
+                f"***** Evaluating generation metrics, Epoch {epoch+1}/{epochs} on task {task} *****",
+                self.args.global_rank)
+            eval_result, eval_predictions = self.task_generation_evaluation(
+                task,
+                eval_dataloader,
+                device,
+                max_ans_len=self._resolve_max_ans_len(i_task),
+                return_predictions=True,
+            )
+            print_rank_0(f"[task={task}] validation result: {eval_result}", self.args.global_rank)
 
-            # self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
+            self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
         
         for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:i_task+1]):
             print_rank_0(
@@ -374,7 +374,9 @@ class CL_Base_Model:
     
     
     def train_continual(self):
-        for i_task, task in enumerate(self.train_task_list):
+        start_task_id = int(getattr(self.args, "start_task_id", 0))
+        task_items = list(self.train_task_list.items())[start_task_id:]
+        for i_task, (task, _) in enumerate(task_items, start=start_task_id):
             self.train_one_task(task, i_task, int(self.args.num_train_epochs[i_task]))
             self.save_model(i_task)
         # self.test_all_tasks_and_save_predictions()
