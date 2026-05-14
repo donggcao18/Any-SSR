@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=4,5,6
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # This script uses 1 GPU. Use a larger disk space (56GB) to save the model checkpoints (full model).
 
@@ -23,9 +23,9 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method EWC \
   --output_dir ./output_models/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
-  --per_device_train_batch_size 2 \
+  --per_device_train_batch_size 3 \
   --per_device_eval_batch_size 8 \
-  --gradient_accumulation_steps 6 \
+  --gradient_accumulation_steps 2 \
   --max_prompt_len 1024 \
   --max_ans_len 2048 \
   --num_train_epochs 3 \
@@ -38,7 +38,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --temperature 0.2 \
   --top_p 0.95 \
   --repetition_penalty 1 \
-  --do_sample 
+  --do_sample \
+  --fp16
 
 : "${HF_MODEL_REPO_ID:=ankhanhtran02/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable}"
 
