@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=1,2,3,4
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 set -euo pipefail
 
@@ -21,9 +21,9 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method SeqLoRA \
   --output_dir ./output_models/SeqLoRA_Qwen2.5-Coder-1.5B_executable \
-  --per_device_train_batch_size 1 \
+  --per_device_train_batch_size 2 \
   --per_device_eval_batch_size 8 \
-  --gradient_accumulation_steps 8 \
+  --gradient_accumulation_steps 4 \
   --temperature 0.2 \
   --top_p 0.95 \
   --repetition_penalty 1 \

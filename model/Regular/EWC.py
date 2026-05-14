@@ -189,18 +189,20 @@ class EWC(CL_Base_Model):
             self._save_generation_predictions(f"eval-epoch{epoch+1}", i_task, task, eval_result, eval_predictions)
 
 
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank)
-        test_result, test_predictions = self.task_generation_evaluation(
-            task,
-            self.test_task_list[task],
-            self.device,
-            max_ans_len=self._resolve_max_ans_len(i_task),
-            return_predictions=True,
-        )
-        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
-        self._save_generation_predictions("test-after-task", i_task, task, test_result, test_predictions)
+        for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:i_task+1]):
+            print_rank_0(
+                f"***** Testing on current task {test_task} after training {task} on all epochs *****",
+                self.args.global_rank)
+            test_result, test_predictions = self.task_generation_evaluation(
+                test_task,
+                test_dataset,
+                self.device,
+                max_ans_len=self._resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+            )
+            print_rank_0(f"[task={test_task}] post-train test result: {test_result}", self.args.global_rank)
+
+            self._save_generation_predictions("test-after-task", i_task, test_task, test_result, test_predictions)
 
 
     
@@ -216,6 +218,6 @@ class EWC(CL_Base_Model):
             
             self._update_previous_params()
             self.save_model(i_task)
-        self.test_all_tasks_and_save_predictions()
+        # self.test_all_tasks_and_save_predictions()
             
             
