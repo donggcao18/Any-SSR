@@ -10,6 +10,9 @@ class EWC(CL_Base_Model):
     def __init__(self,model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args, lambda_ewc=400):
         super().__init__(model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         self.device="cuda"
+        self.use_fp16 = bool(getattr(self.args, "fp16", False))
+        if self.use_fp16:
+            self.model.half()
         self.lambda_ewc = lambda_ewc
         self.trainable_param_names = [
             n for n, p in self.model.named_parameters() if p.requires_grad
@@ -99,7 +102,13 @@ class EWC(CL_Base_Model):
         # inputs_embeds = model.encoder.embed_tokens(batch["source_ids"])
         # inputs_embeds = self.model.model.embed_tokens(batch["input_ids"])  #向量，【batch * embedding_size】
 
-        outputs = self.model(input_ids=batch['input_ids'], labels=lm_labels, attention_mask=batch['attention_mask'],use_cache=False)
+        with torch.cuda.amp.autocast(enabled=self.use_fp16):
+            outputs = self.model(
+                input_ids=batch['input_ids'],
+                labels=lm_labels,
+                attention_mask=batch['attention_mask'],
+                use_cache=False,
+            )
         
         loss = outputs[0]
 

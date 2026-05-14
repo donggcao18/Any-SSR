@@ -194,18 +194,20 @@ class L2P(CL_Base_Model):
                 split_name=f"eval-epoch{epoch+1}",
             )
 
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank,
-        )
-        self.evaluate_one_task(
-            round=i_task,
-            infer_task_id=i_task,
-            task=task,
-            infer_dataloader=self.test_task_list[task],
-            save_results=True,
-            split_name="test-after-task",
-        )
+        ### Test on all seen tasks after finishing training on current task.
+        for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:i_task+1]):
+            print_rank_0(
+                f"***** Testing on task {test_task} after training {task} on all epochs *****",
+                self.args.global_rank,
+            )
+            self.evaluate_one_task(
+                round=i_task,
+                infer_task_id=seen_idx,
+                task=test_task,
+                infer_dataloader=test_dataset,
+                save_results=True,
+                split_name="test-after-task",
+            )
 
     def test_all_tasks_and_save_predictions(self):
         self.args.output_dir = './L2P_final_results'
@@ -447,4 +449,4 @@ class L2P(CL_Base_Model):
 
             if save_results:
                 print_rank_0("***** Saving inference results *****", self.args.global_rank)
-                save_inference_results(evaluation_result, prediction_rows, infer_task_id, task)
+                save_inference_results(evaluation_result, prediction_rows, round, task)

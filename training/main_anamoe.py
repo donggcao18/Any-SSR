@@ -342,6 +342,9 @@ def parse_args():
     parser.add_argument('--enable_wandb',
                 action='store_true',
                 help='Enable wandb logging.')
+    parser.add_argument('--fp16',
+                    action='store_true',
+                    help='Enable fp16 autocast for select CL methods (EWC/MTL).')
     parser.add_argument('--start_layer',
                     type=int,
                     default=4,

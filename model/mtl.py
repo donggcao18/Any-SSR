@@ -13,6 +13,10 @@ class MTL(CL_Base_Model):
             torch.cuda.set_device(self.args.local_rank)
             device = torch.device("cuda", self.args.local_rank)
 
+        use_fp16 = bool(getattr(self.args, "fp16", False))
+        if use_fp16:
+            self.model.half()
+
         train_dataloader = next(iter(self.train_task_list.values()))
         epochs = int(self.args.num_train_epochs[0])
         total_steps = epochs * len(train_dataloader)
@@ -34,7 +38,8 @@ class MTL(CL_Base_Model):
                 global_step += 1
                 del batch["sources"]
                 batch = to_device(batch, device)
-                outputs = self.model(**batch, use_cache=False)
+                with torch.cuda.amp.autocast(enabled=use_fp16):
+                    outputs = self.model(**batch, use_cache=False)
                 loss = outputs.loss
 
                 if self.args.global_rank == 0:
