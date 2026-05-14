@@ -102,7 +102,7 @@ class EWC(CL_Base_Model):
         # inputs_embeds = model.encoder.embed_tokens(batch["source_ids"])
         # inputs_embeds = self.model.model.embed_tokens(batch["input_ids"])  #向量，【batch * embedding_size】
 
-        with torch.cuda.amp.autocast(enabled=self.use_fp16):
+        with torch.amp.autocast("cuda", enabled=self.use_fp16):
             outputs = self.model(
                 input_ids=batch['input_ids'],
                 labels=lm_labels,

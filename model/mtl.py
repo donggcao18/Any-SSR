@@ -38,7 +38,7 @@ class MTL(CL_Base_Model):
                 global_step += 1
                 del batch["sources"]
                 batch = to_device(batch, device)
-                with torch.cuda.amp.autocast(enabled=use_fp16):
+                with torch.amp.autocast("cuda", enabled=use_fp16):
                     outputs = self.model(**batch, use_cache=False)
                 loss = outputs.loss
 
