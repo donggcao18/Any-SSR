@@ -30,9 +30,9 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --lora_alpha 32 \
    --lora_dropout 0.1 \
    --output_dir ./output_models/SeqLoRA_Qwen2.5-Coder-1.5B \
-   --per_device_train_batch_size 16 \
-   --per_device_eval_batch_size 16 \
-   --gradient_accumulation_steps 2 \
+   --per_device_train_batch_size 8 \
+   --per_device_eval_batch_size 8 \
+   --gradient_accumulation_steps 4 \
    --temperature 0.2 \
    --top_p 0.95 \
    --repetition_penalty 1 \
