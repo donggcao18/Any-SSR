@@ -245,59 +245,19 @@ class CL_Base_Model:
             torch.cuda.set_device(self.args.local_rank)
             device = torch.device("cuda", self.args.local_rank)
 
-        prediction_root = os.path.join(self.args.output_dir or ".", "predictions", f"final-{self.__class__.__name__}")
-        if self.args.global_rank == 0:
-            os.makedirs(prediction_root, exist_ok=True)
-
-        if getattr(self.args, "benchmark", "non-executable") == "non-executable":
-            final_metrics = {}
-            for task_idx, (task_name, test_dataloader) in enumerate(self.test_task_list.items()):
-                print_rank_0(
-                    f"***** Final testing on task {task_name} after continual training *****",
-                    self.args.global_rank,
-                )
-                test_result, prediction_rows = self.task_generation_evaluation(
-                    task_name,
-                    test_dataloader,
-                    device,
-                    max_ans_len=self._resolve_max_ans_len(task_idx),
-                    return_predictions=True,
-                )
-                final_metrics[task_name] = test_result
-                print_rank_0(f"[final-test task={task_name}] result: {test_result}", self.args.global_rank)
-
-                if self.args.global_rank == 0:
-                    safe_task_name = str(task_name).replace("/", "_").replace(":", "_")
-                    prediction_file = os.path.join(prediction_root, f"{task_idx}_{safe_task_name}.json")
-                    with open(prediction_file, "w", encoding="utf-8") as f:
-                        json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
-                    print_rank_0(f"Saved final-test predictions to {prediction_file}", self.args.global_rank)
-
-            if self.args.global_rank == 0:
-                metrics_file = os.path.join(prediction_root, "metrics_summary.json")
-                with open(metrics_file, "w", encoding="utf-8") as f:
-                    json.dump(final_metrics, f, ensure_ascii=False, indent=2)
-                print_rank_0(f"Saved final-test metrics to {metrics_file}", self.args.global_rank)
-        else:
-            for task_idx, (task_name, test_dataloader) in enumerate(self.test_task_list.items()):
-                print_rank_0(
-                    f"***** Final testing on task {task_name} after continual training *****",
-                    self.args.global_rank,
-                )
-                _, prediction_rows = self.task_generation_evaluation(
-                    task_name,
-                    test_dataloader,
-                    device,
-                    max_ans_len=self._resolve_max_ans_len(task_idx),
-                    return_predictions=True,
-                )
-
-                if self.args.global_rank == 0:
-                    safe_task_name = str(task_name).replace("/", "_").replace(":", "_")
-                    prediction_file = os.path.join(prediction_root, f"{task_idx}_{safe_task_name}.json")
-                    with open(prediction_file, "w", encoding="utf-8") as f:
-                        json.dump({"eval": {}, "predictions": prediction_rows}, f, ensure_ascii=False, indent=2)
-                    print_rank_0(f"Saved final-test predictions to {prediction_file}", self.args.global_rank)
+        for task_idx, (task_name, test_dataloader) in enumerate(self.test_task_list.items()):
+            print_rank_0(
+                f"***** Final testing on task {task_name} after continual training *****",
+                self.args.global_rank,
+            )
+            test_result, prediction_rows = self.task_generation_evaluation(
+                task_name,
+                test_dataloader,
+                device,
+                max_ans_len=self._resolve_max_ans_len(task_idx),
+                return_predictions=True,
+            )
+            self._save_generation_predictions("final-test", task_idx, task_name, test_result, prediction_rows)
 
 
     def train_one_task(self, task, i_task, epochs):

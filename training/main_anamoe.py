@@ -780,6 +780,9 @@ def main():
     if args.CL_method in Method2Class.keys():
         CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         CL_Trainer.train_continual()
+    elif args.CL_method == "infer_base":
+        CL_Trainer = Method2Class["base"](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
+        CL_Trainer.test_all_tasks_and_save_predictions()
 
 
 if __name__ == "__main__":
