@@ -1,7 +1,14 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
+export SCRATCH_ROOT=/data/scratch/projects/punim1928/east/CodeGR/Dense/any-ssr/.cache
+mkdir -p "$SCRATCH_ROOT/torch_extensions" "$SCRATCH_ROOT/tmp"
+
+export TORCH_EXTENSIONS_DIR=$SCRATCH_ROOT/torch_extensions
+export TMPDIR=$SCRATCH_ROOT/tmp
+export TEMP=$TMPDIR
+export TMP=$TMPDIR
 
 set -euo pipefail
 
@@ -20,11 +27,11 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --learning_rate 1e-4 \
    --CL_method L2P \
    --output_dir ./output_models/L2P_Qwen2.5-Coder-1.5B_with_instruction_pool \
-   --per_device_train_batch_size 8 \
-   --per_device_eval_batch_size 4 \
-   --gradient_accumulation_steps 4 \
+   --per_device_train_batch_size 16 \
+   --per_device_eval_batch_size 16 \
+   --gradient_accumulation_steps 2 \
    --run_name run_1 \
    --group_name L2P_Qwen2.5-Coder-1.5B_with_instruction_pool \
-   --num_train 100 \
+   --num_train -1 \
    --num_eval 10 \
-   --num_test 10 
+   --num_test -1 
