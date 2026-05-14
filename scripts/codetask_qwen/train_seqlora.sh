@@ -2,7 +2,7 @@
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
 export CUDA_VISIBLE_DEVICES=0
-export SCRATCH_ROOT=./.cache
+export SCRATCH_ROOT=/data/scratch/projects/punim1928/east/CodeGR/Dense/any-ssr/.cache
 mkdir -p "$SCRATCH_ROOT/torch_extensions" "$SCRATCH_ROOT/tmp"
 
 export TORCH_EXTENSIONS_DIR=$SCRATCH_ROOT/torch_extensions
