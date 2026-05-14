@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1,2,3,4
 # This script uses 1 GPU. Use a larger disk space (56GB) to save the model checkpoints (full model).
 
 set -euo pipefail
@@ -22,7 +22,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method L2P \
   --output_dir ./output_models/L2P_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
-  --per_device_train_batch_size 4 \
+  --per_device_train_batch_size 1 \
   --per_device_eval_batch_size 16 \
   --gradient_accumulation_steps 8 \
   --run_name run_1 \

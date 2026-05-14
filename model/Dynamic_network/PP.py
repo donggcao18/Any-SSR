@@ -6,7 +6,7 @@ from tqdm.auto import tqdm
 import logging, os, argparse
 import json
 from copy import deepcopy
-from transformers import AdamW
+from transformers import AdamW, GenerationConfig
 from model.base_model import CL_Base_Model
 from utils.utils import print_rank_0, to_device
 
@@ -501,7 +501,7 @@ class PP(CL_Base_Model):
             if self.prefix_MLP!=None:
                 mlp.train()
 
-            for step, batch in enumerate(tqdm(dataloader_train)):
+            for step, batch in enumerate(dataloader_train):
                 del batch['sources']
                 batch.pop('indices', None)
                 batch = {k:batch[k].to('cuda') for k in batch}
