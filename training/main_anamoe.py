@@ -465,7 +465,8 @@ def main():
         from peft import get_peft_model, LoraConfig, TaskType
         
         peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout
+            task_type=TaskType.CAUSAL_LM, r=args.lora_dim, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
+            target_modules=["q_proj", "v_proj"]
         )
         model = get_peft_model(model, peft_config)
         for name, param in model.named_parameters():

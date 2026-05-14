@@ -8,7 +8,7 @@ set -euo pipefail
 port=$(shuf -i25000-30000 -n1)
 
 deepspeed --master_port "$port" training/main_anamoe.py \
-   --data_path /path/to/LLM-CL-Benchmark_5000 \
+   --benchmark non-executable \
    --dataset_name all \
    --model_name_or_path Qwen/Qwen2.5-Coder-1.5B \
    --lr_scheduler_type cosine \
@@ -18,13 +18,19 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --deepspeed \
    --print_loss \
    --learning_rate 1e-4 \
-   --CL_method L2P \
-   --output_dir ./output_models/L2P_Qwen2.5-Coder-1.5B_with_instruction_pool \
-   --per_device_train_batch_size 8 \
+   --CL_method lora \
+   --lora_dim 16 \
+   --lora_alpha 32 \
+   --lora_dropout 0.1 \
+   --output_dir ./output_models/SeqLoRA_Qwen2.5-Coder-1.5B \
+   --per_device_train_batch_size 4 \
    --per_device_eval_batch_size 4 \
    --gradient_accumulation_steps 4 \
+   --temperature 0.2 \
+   --top_p 0.95 \
+   --repetition_penalty 1 \
    --run_name run_1 \
-   --group_name L2P_Qwen2.5-Coder-1.5B_with_instruction_pool \
+   --group_name SeqLoRA_Qwen2.5-Coder-1.5B \
    --num_train 100 \
    --num_eval 10 \
    --num_test 10 
