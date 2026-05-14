@@ -202,9 +202,29 @@ class PP(CL_Base_Model):
         predicted_sequences = []
         sources_sequences = []
         ground_truths = []
+        sample_indices = []
+
+        is_executable = getattr(self.args, "benchmark", "non-executable") != "non-executable"
+        if is_executable:
+            return_predictions = True
+            num_return_sequences = int(getattr(self.args, "num_return_sequences", 1))
+            top_k = int(getattr(self.args, "top_k", 0))
+            generation_kwargs = self.generation_config.to_dict()
+            generation_kwargs.update({
+                "num_return_sequences": num_return_sequences,
+                "top_k": top_k,
+            })
+            generation_config = GenerationConfig(**generation_kwargs)
+        else:
+            num_return_sequences = 1
+            generation_config = self.generation_config
 
         progress_bar = tqdm(total=len(test_dataloader), leave=True, disable=(self.args.global_rank != 0))
         for i, batch in enumerate(test_dataloader):
+            batch_indices = batch.pop('indices', None)
+            if batch_indices is not None:
+                sample_indices.extend(batch_indices.detach().cpu().tolist())
+
             sources_sequences += batch['sources']
             if 'gts' in batch:
                 ground_truths += batch['gts']
@@ -296,25 +316,44 @@ class PP(CL_Base_Model):
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False
             )
-            predicted_sequences += sequences
+            
+            if is_executable and num_return_sequences > 1:
+                batch_preds = [
+                    sequences[i:i + num_return_sequences]
+                    for i in range(0, len(sequences), num_return_sequences)
+                ]
+                predicted_sequences.extend(batch_preds)
+            else:
+                predicted_sequences += sequences
 
             if self.args.global_rank == 0:
                 progress_bar.update(1)
                 description = f"Test step {i}"
                 progress_bar.set_description(description, refresh=False)
 
-        metrics = self._task_eval_from_predictions(task, sources_sequences, predicted_sequences, ground_truths)
+        prediction_rows = [
+            {
+                "source": source,
+                "ground-truth": gt,
+                "prediction": pred,
+            }
+            for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
+        ]
+        if len(sample_indices) == len(prediction_rows):
+            for row, index in zip(prediction_rows, sample_indices):
+                row["__index__"] = index
+
+        prediction_rows = self._gather_prediction_rows(prediction_rows)
+        sources_sequences = [row["source"] for row in prediction_rows]
+        ground_truths = [row["ground-truth"] for row in prediction_rows]
+        predicted_sequences = [row["prediction"] for row in prediction_rows]
+
+        metrics = {} if is_executable else self._task_eval_from_predictions(
+            task, sources_sequences, predicted_sequences, ground_truths
+        )
         if return_predictions:
-            prediction_rows = [
-                {
-                    "source": source,
-                    "ground-truth": gt,
-                    "prediction": pred,
-                }
-                for source, gt, pred in zip(sources_sequences, ground_truths, predicted_sequences)
-            ]
             return metrics, prediction_rows
-        return metrics  
+        return metrics
 
     # Perform one train step for prompt tuning (following Lester et al.)
     def train_step_lester(self,
@@ -524,51 +563,25 @@ class PP(CL_Base_Model):
                 curr_prompt = self.model.model.prompt
             else:
                 curr_prompt = None
-        print_rank_0(
-            f"***** Testing on current task {task} after all epochs *****",
-            self.args.global_rank)
-        test_result, test_predictions = self.task_generation_evaluation(
-            task,
-            self.test_task_list[task],
-            self.device,
-            max_ans_len=self._resolve_max_ans_len(task_num),
-            return_predictions=True,
-            prompt=curr_prompt
-        )
-        print_rank_0(f"[task={task}] post-train test result: {test_result}", self.args.global_rank)
-        self._save_generation_predictions("test-after-task", task_num, task, test_result, test_predictions)
-        # log_dict = {
-        #     "task_id": task_num,
-        # }
-        # trained_task_name = str(task).replace("/", "_").replace(":", "_")
-        # prediction_dir = os.path.join(self.args.output_dir or ".", "predictions", f"{task_num}-{trained_task_name}")
-        # if self.args.global_rank == 0:
-        #     os.makedirs(prediction_dir, exist_ok=True)
-        # for seen_idx, (eval_task, eval_dataset) in enumerate(list(self.eval_task_list.items())[task_num:task_num+1]):
-        #     print_rank_0(f"***** Validating on {eval_task} after task training: {task} *****", self.args.global_rank)
-        #     test_result, prediction_rows = self.task_generation_evaluation(
-        #         eval_task,
-        #         eval_dataset,
-        #         self.device,
-        #         max_ans_len=int(self.args.max_ans_len[seen_idx]),
-        #         return_predictions=True,
-        #         prompt=curr_prompt
-        #     )
-        #     print_rank_0(f"[task={eval_task}] validation result: {test_result}", self.args.global_rank)
-        #     log_dict[f"eval_task/seen_task_{eval_task}/exact_match"] = test_result["exact_match"]
-        #     log_dict[f"eval_task/seen_task_{eval_task}/bleu"] = test_result["bleu"]
-        #     log_dict[f"eval_task/seen_task_{eval_task}/codebleu"] = test_result["codebleu"]
+        
+        for seen_idx, (test_task, test_dataset) in enumerate(list(self.test_task_list.items())[:task_num+1]):        
+            print_rank_0(
+                f"***** Testing on current task {task} after all epochs *****",
+                self.args.global_rank)
+            test_result, test_predictions = self.task_generation_evaluation(
+                test_task,
+                test_dataset,
+                self.device,
+                max_ans_len=self._resolve_max_ans_len(seen_idx),
+                return_predictions=True,
+                prompt=curr_prompt
+            )
+            print_rank_0(f"[task={test_task}] post-train test result: {test_result}", self.args.global_rank)
+            self._save_generation_predictions("test-after-task", task_num, test_task, test_result, test_predictions)
 
-        #     if self.args.global_rank == 0:
-        #         eval_task_name = str(eval_task).replace("/", "_").replace(":", "_")
-        #         prediction_file = os.path.join(prediction_dir, f"{seen_idx}_{eval_task_name}.json")
-        #         with open(prediction_file, "w", encoding="utf-8") as f:
-        #             json.dump(prediction_rows, f, ensure_ascii=False, indent=2)
-        #         print_rank_0(f"Saved predictions to {prediction_file}", self.args.global_rank)
-
-        # TEST ON ALL TASKS FOR THE LAST TRAINED TASK
-        if last_task:
-            self.test_all_tasks_and_save_predictions(prompt=curr_prompt)
+        # # TEST ON ALL TASKS FOR THE LAST TRAINED TASK
+        # if last_task:
+        #     self.test_all_tasks_and_save_predictions(prompt=curr_prompt)
 
     def test_all_tasks_and_save_predictions(self, prompt):
         prediction_root = os.path.join(self.args.output_dir or ".", "predictions", f"final-{self.__class__.__name__}")
