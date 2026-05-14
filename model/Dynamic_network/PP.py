@@ -305,7 +305,7 @@ class PP(CL_Base_Model):
                     max_new_tokens=max_ans_len,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=pad_token_id,
-                    generation_config=self.generation_config,
+                    generation_config=generation_config,
                     use_cache=True,
                 )
 
