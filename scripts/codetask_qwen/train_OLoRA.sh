@@ -19,7 +19,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --print_loss \
    --learning_rate 1e-4 \
    --CL_method O-LoRA \
-   --output_dir ./output_models/OLoRA_Qwen2.5-Coder-1.5B_with_instruction_pool \
+   --output_dir ./output_models/OLoRA_Qwen2.5-Coder-1.5B \
    --per_device_train_batch_size 8 \
    --per_device_eval_batch_size 4 \
    --gradient_accumulation_steps 4 \
@@ -27,4 +27,4 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --top_p 0.95 \
    --repetition_penalty 1 \
    --run_name run_1 \
-   --group_name OLoRA_Qwen2.5-Coder-1.5B_with_instruction_pool \
+   --group_name OLoRA_Qwen2.5-Coder-1.5B \
