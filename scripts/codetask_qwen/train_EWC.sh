@@ -28,3 +28,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --per_device_train_batch_size 8 \
    --per_device_eval_batch_size 16 \
    --gradient_accumulation_steps 4 \
+   --run_name run_1 \
+   --group_name EWC_Qwen2.5-Coder-1.5B \
+   --num_train -1 \
+   --num_eval 10 \
+   --num_test -1 
