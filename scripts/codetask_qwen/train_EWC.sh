@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0,1
 export SCRATCH_ROOT=/data/scratch/projects/punim1928/east/CodeGR/Dense/any-ssr/.cache
 mkdir -p "$SCRATCH_ROOT/torch_extensions" "$SCRATCH_ROOT/tmp"
 
@@ -27,7 +27,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --output_dir ./output_models/EWC_Qwen2.5-Coder-1.5B \
    --per_device_train_batch_size 8 \
    --per_device_eval_batch_size 16 \
-   --gradient_accumulation_steps 4 \
+   --gradient_accumulation_steps 2 \
    --run_name run_1 \
    --group_name EWC_Qwen2.5-Coder-1.5B \
    --num_train -1 \
