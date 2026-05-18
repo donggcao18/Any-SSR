@@ -6,13 +6,13 @@ export CUDA_VISIBLE_DEVICES=0
 set -euo pipefail
 
 checkpoint_root=./output_models/OLoRA_Qwen2.5-Coder-1.5B
-output_root=${checkpoint_root}/forgetting_eval
+output_root=${checkpoint_root}/predictions
 model_name_or_path=Qwen/Qwen2.5-Coder-1.5B
 
 start_task_id=0
 end_task_id=7
 
-per_device_eval_batch_size=8
+per_device_eval_batch_size=32
 lora_alpha=32
 lora_r=16
 num_test=-1
