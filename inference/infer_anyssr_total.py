@@ -65,7 +65,7 @@ from model.Replay.LFPT5 import getInitialPrompt
 from model.Dynamic_network.PP import PP, convert_PP_model
 from model.Dynamic_network.L2P import convert_L2P_model
 
-from moe import NewSdpaAttention, NewLlamaForCausalLM, NewLlamaDecoderLayer, NewLlamaModel, NewQwen2SdpaAttention, NewQwen2ForCausalLM, NewQwen2DecoderLayer, NewQwen2Model, configure_router_layers
+from moe import NewSdpaAttention, NewLlamaForCausalLM, NewLlamaDecoderLayer, NewLlamaModel, NewQwen2SdpaAttention, NewQwen2ForCausalLM, NewQwen2DecoderLayer, NewQwen2Model
 from transformers import GenerationConfig
 from transformers.models.llama import modeling_llama, LlamaConfig
 from transformers.models.qwen2 import modeling_qwen2
@@ -422,7 +422,7 @@ def main():
                 },
             )
             lora_id += 1
-            
+
         model.model.moe_classifier.weight = torch.nn.Parameter(classifier_weight)
         model.model.fe.weight = torch.nn.Parameter(fe_weight)        
         model.to(device)
