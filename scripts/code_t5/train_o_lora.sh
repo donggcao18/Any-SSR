@@ -30,7 +30,4 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --output_dir ./output_models/t5_o_lora/CodeTrans \
    --run_name t5_o_lora_CodeTrans \
    --group_name t5_o_lora \
-   --logging_steps 10 \
-   --num_train 2500 \
-   --num_eval 100 \
-   --num_test 100
+   --logging_steps 100
