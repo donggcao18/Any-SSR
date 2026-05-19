@@ -31,6 +31,4 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --run_name t5_seq \
    --group_name t5_seq \
    --logging_steps 100 \
-   --num_train 250 \
-   --num_eval 100 \
-   --num_test 100
+   --num_eval 10 
