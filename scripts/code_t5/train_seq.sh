@@ -1,7 +1,7 @@
 #!/bin/bash
 export HF_HOME=./.cache
 export HF_DATASETS_CACHE=./.cache
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 export SCRATCH_ROOT=/data/scratch/projects/punim1928/east/CodeGR/Dense/any-ssr/.cache
 mkdir -p "$SCRATCH_ROOT/torch_extensions" "$SCRATCH_ROOT/tmp"
 
@@ -16,9 +16,9 @@ port=$(shuf -i25000-30000 -n1)
 deepspeed --master_port "$port" training/main_anamoe.py \
    --model_name_or_path Salesforce/codet5p-770m \
    --data_path "" \
-   --per_device_train_batch_size 16 \
-   --per_device_eval_batch_size 8 \
-   --gradient_accumulation_steps 2 \
+   --per_device_train_batch_size 32 \
+   --per_device_eval_batch_size 32 \
+   --gradient_accumulation_steps 1 \
    --learning_rate 1e-4 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
@@ -26,11 +26,11 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --zero_stage 2 \
    --deepspeed \
    --print_loss \
-   --CL_method base \
-   --output_dir ./output_models/t5_seq/CodeTrans \
-   --run_name t5_seq_CodeTrans \
-   --group_name t5_seq_CodeTrans \
-   --logging_steps 10 \
-   --num_train 2500 \
+   --CL_method lora \
+   --output_dir ./output_models/t5_seq \
+   --run_name t5_seq \
+   --group_name t5_seq \
+   --logging_steps 100 \
+   --num_train 250 \
    --num_eval 100 \
    --num_test 100

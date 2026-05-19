@@ -27,7 +27,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --deepspeed \
    --print_loss \
    --CL_method O-LoRA \
-   --output_dir ./output_models/t5_o_lora/CodeTrans \
+   --output_dir ./output_models/t5_o_lora \
    --run_name t5_o_lora_CodeTrans \
    --group_name t5_o_lora \
    --logging_steps 100

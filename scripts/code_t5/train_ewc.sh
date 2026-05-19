@@ -27,10 +27,10 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --deepspeed \
    --print_loss \
    --CL_method EWC \
-   --output_dir ./output_models/t5_ewc/CodeTrans \
-   --run_name t5_ewc_CodeTrans \
-   --group_name t5_ewc_CodeTrans \
+   --output_dir ./output_models/t5_ewc \
+   --run_name t5_ewc \
+   --group_name t5_ewc \
    --logging_steps 10 \
-   --num_train 2500 \
+   --num_train 250 \
    --num_eval 100 \
    --num_test 100

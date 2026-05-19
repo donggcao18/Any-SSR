@@ -16,9 +16,9 @@ port=$(shuf -i25000-30000 -n1)
 deepspeed --master_port "$port" training/main_anamoe.py \
    --model_name_or_path Salesforce/codet5p-770m \
    --data_path "" \
-   --per_device_train_batch_size 16 \
-   --per_device_eval_batch_size 8 \
-   --gradient_accumulation_steps 2 \
+   --per_device_train_batch_size 32 \
+   --per_device_eval_batch_size 32 \
+   --gradient_accumulation_steps 1 \
    --learning_rate 0.1 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
@@ -27,10 +27,10 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --deepspeed \
    --print_loss \
    --CL_method L2P \
-   --output_dir ./output_models/t5_l2p/CodeTrans \
-   --run_name t5_l2p_CodeTrans \
+   --output_dir ./output_models/t5_l2p \
+   --run_name t5_l2p \
    --group_name t5_l2p \
    --logging_steps 10 \
-   --num_train 2500 \
+   --num_train 250 \
    --num_eval 100 \
    --num_test 100
