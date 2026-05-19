@@ -13,19 +13,18 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --per_device_train_batch_size 16 \
    --per_device_eval_batch_size 8 \
    --gradient_accumulation_steps 2 \
-   --learning_rate 0.1 \
-   --num_train_epochs 1,1 \
+   --learning_rate 1e-4 \
    --lr_scheduler_type cosine \
    --num_warmup_steps 0 \
    --seed 1234 \
    --zero_stage 2 \
    --deepspeed \
    --print_loss \
-   --CL_method L2P \
-   --output_dir ./output_models/t5_l2p/CodeTrans \
-   --run_name t5_l2p_CodeTrans \
-   --group_name t5_l2p_CodeTrans \
+   --CL_method O-LoRA \
+   --output_dir ./output_models/t5_o_lora/CodeTrans \
+   --run_name t5_o_lora_CodeTrans \
+   --group_name t5_o_lora \
    --logging_steps 10 \
    --num_train 2500 \
    --num_eval 100 \
-   --num_test 100 \
+   --num_test 100
