@@ -17,7 +17,7 @@ deepspeed --master_port "$port" training/main_anamoe.py \
    --model_name_or_path Salesforce/codet5p-770m \
    --data_path "" \
    --per_device_train_batch_size 16 \
-   --per_device_eval_batch_size 8 \
+   --per_device_eval_batch_size 16 \
    --gradient_accumulation_steps 2 \
    --learning_rate 1e-4 \
    --lr_scheduler_type cosine \
