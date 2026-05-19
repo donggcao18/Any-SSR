@@ -1,4 +1,4 @@
-name: anyssr
+name: Eastv2
 channels:
   - pytorch
   - nvidia
