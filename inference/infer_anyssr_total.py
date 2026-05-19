@@ -278,8 +278,7 @@ def main():
 
         is_executable = getattr(args, "benchmark", "non-executable") != "non-executable"
         if is_executable:
-            return_predictions = True
-            num_return_sequences = int(getattr(args, "num_return_sequences", 1))
+            num_return_sequences = int(getattr(args, "num_return_sequences", 5))
             top_k = int(getattr(args, "top_k", 0))
             generation_kwargs = generation_config.to_dict()
             generation_kwargs.update({
@@ -411,7 +410,7 @@ def main():
         )
 
         fe_weight = torch.load(fe_path, map_location="cpu").to(model_dtype)
-        classifier_weight = torch.load(router_path, map_location="cpu").to(model_dtype)
+        classifier_weight = torch.load(router_path, map_location="cpu").transpose(0, 1).to(model_dtype)
         
         lora_id = 0
         for lora_path in inference_model_path[:(i+1)]:
@@ -423,13 +422,9 @@ def main():
                 },
             )
             lora_id += 1
-        
-        configure_router_layers(
-            model,
-            fe_weight=fe_weight,
-            classifier_weight=classifier_weight,
-            tasks=i + 1,
-        )
+            
+        model.model.moe_classifier.weight = torch.nn.Parameter(classifier_weight)
+        model.model.fe.weight = torch.nn.Parameter(fe_weight)        
         model.to(device)
 
         cur_inference_tasks = inference_tasks[0:i+1]
