@@ -79,5 +79,5 @@ class MTL(CL_Base_Model):
                     eval_predictions,
                 )
 
-        self.save_model("final")
+            self.save_model(f"epoch-{epoch+1}")
         self.test_all_tasks_and_save_predictions()

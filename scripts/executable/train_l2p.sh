@@ -19,6 +19,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --zero_stage 2 \
   --deepspeed \
   --print_loss \
+  --offload \
+  --gradient_checkpointing \
   --learning_rate 1e-4 \
   --CL_method L2P \
   --output_dir ./output_models/L2P_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
