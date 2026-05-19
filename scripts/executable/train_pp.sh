@@ -30,9 +30,9 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --top_p 0.95 \
   --repetition_penalty 1 \
   --do_sample \
-  --num_train 10 \
-  --num_eval 36 \
-  --num_test 4 \
+  --num_train -1 \
+  --num_eval 3 \
+  --num_test -1 \
   --run_name run_1 \
   --group_name PP_Qwen2.5-Coder-1.5B_executable \
   --max_prompt_len 1024,1024,1024,1024,1024,1024,1024,1024,1024 \

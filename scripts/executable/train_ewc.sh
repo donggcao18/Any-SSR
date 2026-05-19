@@ -23,9 +23,9 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --learning_rate 1e-4 \
   --CL_method EWC \
   --output_dir ./output_models/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable \
-  --per_device_train_batch_size 3 \
+  --per_device_train_batch_size 5 \
   --per_device_eval_batch_size 8 \
-  --gradient_accumulation_steps 2 \
+  --gradient_accumulation_steps 1 \
   --max_prompt_len 1024 \
   --max_ans_len 2048 \
   --num_train_epochs 3 \
@@ -39,7 +39,8 @@ deepspeed --master_port "$port" training/main_anamoe.py \
   --top_p 0.95 \
   --repetition_penalty 1 \
   --do_sample \
-  --fp16
+  --fp16 \
+  --gradient_checkpointing 
 
 : "${HF_MODEL_REPO_ID:=ankhanhtran02/EWC_Qwen2.5-Coder-1.5B_with_instruction_pool_executable}"
 
